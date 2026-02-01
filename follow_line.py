@@ -10,28 +10,22 @@ sensor = adafruit_bh1750.BH1750(i2c)
 
 # Initialize Plink board
 plink = Plink()
-plink.power_supply_voltage = 9.0  # Set to our battery voltage
+plink.power_supply_voltage = 9.6  # Set to our battery voltage
 
-# motor channels
-left_motor_front = plink.channel1
-left_motor_back = plink.channel2
-right_motor_front = plink.channel3
-right_motor_back = plink.channel4
+# Set up motor channels - 1 motor per side
+left_motor = plink.channel1
+right_motor = plink.channel2
 
 # Set motor voltage limits (default is 0)
-left_motor_front.motor_voltage_limit = 6.0
-left_motor_back.motor_voltage_limit = 6.0
-right_motor_front.motor_voltage_limit = 6.0
-right_motor_back.motor_voltage_limit = 6.0
+left_motor.motor_voltage_limit = 6.0
+right_motor.motor_voltage_limit = 6.0
 
 # Connect to the board
 plink.connect()
 
 # Set control mode to POWER (i.e. simple)
-left_motor_front.control_mode = ControlMode.POWER
-left_motor_back.control_mode = ControlMode.POWER
-right_motor_front.control_mode = ControlMode.POWER
-right_motor_back.control_mode = ControlMode.POWER
+left_motor.control_mode = ControlMode.POWER
+right_motor.control_mode = ControlMode.POWER
 
 #Calibration on white
 print("BEGIN CALIBRATION WHITE")
@@ -51,9 +45,13 @@ meanBlack = sum(blackCal) / len(blackCal)
 
 #Caluculate Threshold
 edgeThreshold = (meanBlack + meanWhite) / 2
+# Calculate deadzone as a percentage of the total range
+sensor_range = abs(meanWhite - meanBlack)
+deadzone = sensor_range * 0.08  # 8% of range for deadzone
 print(f"Average White reading: {meanWhite}")
 print(f"Average Black reading: {meanBlack}")
 print(f"Resulting edge threshold: {edgeThreshold}")
+print(f"Deadzone range: +/- {deadzone:.1f} lux")
 print("Beginning course traversal in 5 seconds:")
 time.sleep(5)
 
@@ -66,9 +64,10 @@ time.sleep(5)
 #--------------------------------------------------------------#
 
 # PID Control parameters
-gain = 0.1              # Proportional gain (start low, increase if sluggish)
-base_speed = 0.3        # Base forward speed (0.0 to 1.0)
-correction_limit = 0.2  # Max correction to prevent wild turns
+gain = 0.2             # Proportional gain (start low, increase if sluggish)
+base_speed = 0.8      # Base forward speed (0.0 to 1.0)
+correction_limit = 0.3  # Max correction to prevent wild turns
+min_speed = 0.15       # Minimum speed to keep wheels always moving
 
 print("Starting line following...")
 
@@ -76,40 +75,50 @@ try:
     while True:
         luxSample = sensor.lux
         error = luxSample - edgeThreshold
-        correction = gain * error
         
-        #over-steering prevention
-        correction = max(-correction_limit, min(correction_limit, correction))
+        # Apply deadzone - if error is small, go straight (no correction)
+        if abs(error) < deadzone:
+            # In deadzone: both motors at same speed for straight line
+            correction = 0.0
+            left_power = base_speed
+            right_power = base_speed
+        else:
+            # Outside deadzone: apply steering correction
+            # Reduce error by deadzone amount to smooth transition
+            if error > 0:
+                error = error - deadzone
+            else:
+                error = error + deadzone
+            correction = gain * error
+            
+            #over-steering prevention
+            correction = max(-correction_limit, min(correction_limit, correction))
+            
+            # Positive correction = too bright = turn left (slow down left motor)
+            # Negative correction = too dark = turn right (slow down right motor)
+            left_power = base_speed - correction
+            right_power = base_speed + correction
         
-        # Positive correction = too bright = turn left (slow down left motor)
-        # Negative correction = too dark = turn right (slow down right motor)
-        left_power = base_speed - correction
-        right_power = base_speed + correction
+        # motor power range [min_speed, 1.0] - always moving, never backwards
+        left_power = max(min_speed, min(1.0, left_power))
+        right_power = max(min_speed, min(1.0, right_power))
         
-        # motor power range [-1.0, 1.0]
-        left_power = max(-1.0, min(1.0, left_power))
-        right_power = max(-1.0, min(1.0, right_power))
-        
-        # Send power to motors
-        left_motor_front.power_command = left_power
-        left_motor_back.power_command = left_power
-        right_motor_front.power_command = right_power
-        right_motor_back.power_command = right_power
+        # Send power to motors (reversed with negative sign)
+        left_motor.power_command = -left_power
+        right_motor.power_command = -right_power
         
         # Debug output
         print(f"Lux: {luxSample:6.1f} | Error: {error:6.1f} | "
               f"Correction: {correction:6.2f} | L: {left_power:5.2f} R: {right_power:5.2f}")
         
-        # print(f"Encoders - LF: {left_motor_front.position:.2f} LB: {left_motor_back.position:.2f}")
-        # print(f"           RF: {right_motor_front.position:.2f} RB: {right_motor_back.position:.2f}")
+        # Optional: Read encoder positions for debugging
+        # print(f"Encoders - L: {left_motor.position:.2f} R: {right_motor.position:.2f}")
         
         time.sleep(0.05)  # 20Hz control loop
 
 except KeyboardInterrupt:
-    # Stop all motors when program exits
+    # Stop motors when program exits
     print("\nStopping motors...")
-    left_motor_front.power_command = 0.0
-    left_motor_back.power_command = 0.0
-    right_motor_front.power_command = 0.0
-    right_motor_back.power_command = 0.0
+    left_motor.power_command = 0.0
+    right_motor.power_command = 0.0
     print("Program terminated.")
