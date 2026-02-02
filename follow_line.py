@@ -27,20 +27,13 @@ plink.connect()
 left_motor.control_mode = ControlMode.VELOCITY
 right_motor.control_mode = ControlMode.VELOCITY
 
-# IMU handle (gyro/accel/mag)
-imu = plink.imu
-
 # Set velocity PID gains (P, I, D) - may need tuning for your motors
 left_motor.set_velocity_pid_gains(4.5, 0.1, 0.0)
 right_motor.set_velocity_pid_gains(4.5, 0.1, 0.0)
 
 # Ensure motors are stopped during calibration
-def stop_motors():
-    left_motor.velocity_command = 0.0
-    right_motor.velocity_command = 0.0
-
-stop_motors()
-time.sleep(0.1)
+left_motor.velocity_command = 0.0
+right_motor.velocity_command = 0.0
 
 #Calibration on white
 print("BEGIN CALIBRATION WHITE")
@@ -58,186 +51,89 @@ time.sleep(3)
 blackCal = [sensor.lux for _ in range(20)] 
 meanBlack = sum(blackCal) / len(blackCal)
 
-#Calculate Threshold and normalized parameters
+#Caluculate Threshold
 edgeThreshold = (meanBlack + meanWhite) / 2
-# Use max to prevent division by zero if sensor range is too small
-sensor_range = max(1.0, abs(meanWhite - meanBlack))
-deadzone_norm = 0.08  # Normalized deadzone (8% of range)
+# Calculate deadzone as a percentage of the total range
+sensor_range = abs(meanWhite - meanBlack)
+deadzone = sensor_range * 0.08  # 8% of range for deadzone
 print(f"Average White reading: {meanWhite}")
 print(f"Average Black reading: {meanBlack}")
 print(f"Resulting edge threshold: {edgeThreshold}")
-print(f"Sensor range: {sensor_range:.1f} lux")
-print(f"Normalized deadzone: {deadzone_norm}")
+print(f"Deadzone range: +/- {deadzone:.1f} lux")
 print("Beginning course traversal in 5 seconds:")
 time.sleep(5)
 
-# Ensure motors are still stopped before starting control loop
-stop_motors()
-
 #TUNING INSTRUCTIONS
 #--------------------------------------------------------------#
-# PD CONTROL:
-#   p_gain: Proportional gain - responds to current error
-#   d_gain: Derivative gain - dampens oscillation, anticipates changes
-# 
-# VELOCITY:
-#   base_velocity: Base forward velocity in rad/s
-#   correction_limit: Maximum velocity correction in rad/s
-#   min_velocity/max_velocity: Velocity bounds
-#   max_delta: Slew rate limit (rad/s per cycle at 20Hz)
-#
-# MODES:
-#   sharp_turn_threshold: Error level to trigger aggressive turn mode
-#   lost_line_threshold: Error level to trigger line recovery mode
+# gain: Controls how aggressively robot corrects
+# base_velocity: Base forward velocity in rad/s
+# correction_limit: Maximum velocity correction to prevent over-steering
+# min_velocity: Minimum velocity to keep wheels always moving
+# Velocity PID gains: Tune if motors don't track velocity well
 #--------------------------------------------------------------#
 
 # Velocity Control parameters
-# PD Control gains
-p_gain = 5.0               # Proportional gain in (rad/s) per normalized error
-d_gain = 1.5               # Derivative gain - reduces oscillation and overshooting
-base_velocity = 4         # Base speed for gentle turns
-correction_limit = 1.5     # Max velocity correction in rad/s
-min_velocity = 0.1         # Minimum velocity in rad/s
-max_velocity = 5         # Maximum velocity cap
-
-# Sharp turn parameters (large errors)
-sharp_turn_threshold = 0.25       # Normalized error above this = sharp turn
-sharp_turn_p_gain = 8.0          # Higher P gain for aggressive turning
-sharp_turn_d_gain = 2.0          # Higher D gain for sharp turns
-sharp_turn_base_velocity = 1.0   # Slower base speed during sharp turns
-sharp_turn_min_velocity = 0.05   # Allow wheel to almost stop
-
-# PD control state tracking
-prev_error = 0.0                 # Previous error for derivative calculation
-dt = 0.05                        # Time step (20Hz control loop)
-
-# Slew rate limiting (prevents jerky changes)
-prev_left = 0.0
-prev_right = 0.0
-max_delta = 0.4                  # rad/s per cycle (increased for faster response)
+gain = 0.3              # Proportional gain (increased for sharper turns)
+base_velocity = 4.5
+max_velocity = base_velocity     # Base forward velocity in rad/s
+correction_limit = 2.0  # Max velocity correction in rad/s
+min_velocity = 0.5      # Minimum velocity in rad/s
 
 print("Starting line following...")
 
 try:
     while True:
-        # Read sensor directly (no filtering)
         luxSample = sensor.lux
-        
-        # Raw normalized error (do not modify this)
-        raw_error = (luxSample - edgeThreshold) / sensor_range
-        
-        # Calculate derivative using raw error only
-        d_error = (raw_error - prev_error) / dt
+        error = luxSample - edgeThreshold
 
         # Apply deadzone - if error is small, go straight (no correction)
-        if abs(raw_error) < deadzone_norm:
+        if abs(error) < deadzone:
             # In deadzone: both motors at same velocity for straight line
             left_velocity = base_velocity
             right_velocity = base_velocity
-            turn_mode = "STRAIGHT"
-            
-        elif raw_error > deadzone_norm:
-            # Too bright => too far right of line, turn LEFT to seek right edge
-            adj_error = raw_error - deadzone_norm
-            p_term = p_gain * adj_error
-            d_term = d_gain * d_error
-            correction = p_term + d_term
-            correction = max(-correction_limit, min(correction_limit, correction))
-
-            left_velocity = base_velocity - correction
-            right_velocity = base_velocity + correction
-            left_velocity = min(max_velocity, max(min_velocity, left_velocity))
-            right_velocity = min(max_velocity, max(min_velocity, right_velocity))
-            turn_mode = "SEEK RIGHT EDGE"
-
-        elif raw_error < -deadzone_norm:
-            # Too dark => too far left of line, turn RIGHT to seek right edge
-            adj_error = raw_error + deadzone_norm
-            p_term = p_gain * adj_error
-            d_term = d_gain * d_error
-            correction = p_term + d_term
-            correction = max(-correction_limit, min(correction_limit, correction))
-
-            left_velocity = base_velocity - correction
-            right_velocity = base_velocity + correction
-            left_velocity = min(max_velocity, max(min_velocity, left_velocity))
-            right_velocity = min(max_velocity, max(min_velocity, right_velocity))
-            turn_mode = "SEEK RIGHT EDGE"
-            
-        elif abs(raw_error) > sharp_turn_threshold:
-            # SHARP TURN MODE: Large error detected, apply aggressive turning
-            # Remove deadzone smoothly to prevent jumps
-            if raw_error > 0:
-                adj_error = raw_error - deadzone_norm
-            else:
-                adj_error = raw_error + deadzone_norm
-            
-            # PD control for sharp turns
-            p_term = sharp_turn_p_gain * adj_error
-            d_term = sharp_turn_d_gain * d_error
-            correction = p_term + d_term
-            correction = max(-correction_limit, min(correction_limit, correction))
-            
-            left_velocity = sharp_turn_base_velocity - correction
-            right_velocity = sharp_turn_base_velocity + correction
-            
-            # Allow wheels to almost stop for tightest turns
-            left_velocity = min(max_velocity, max(sharp_turn_min_velocity, left_velocity))
-            right_velocity = min(max_velocity, max(sharp_turn_min_velocity, right_velocity))
-            turn_mode = "SHARP TURN"
-            
         else:
-            # GENTLE TURN MODE: Normal differential steering with PD control
-            # Remove deadzone smoothly to prevent jumps
-            if raw_error > 0:
-                adj_error = raw_error - deadzone_norm
+            # Outside deadzone: apply steering correction
+            # Reduce error by deadzone amount to smooth transition
+            if error > 0:
+                error = error - deadzone
             else:
-                adj_error = raw_error + deadzone_norm
-
-            # PD control: P term responds to current error, D term dampens oscillation
-            p_term = p_gain * adj_error
-            d_term = d_gain * d_error
-            correction = p_term + d_term
+                error = error + deadzone
+            correction = gain * error
             
-            # Over-steering prevention
+            # over-steering prevention
             correction = max(-correction_limit, min(correction_limit, correction))
             
-            # Positive correction = too bright = turn left (slow down left motor)
-            # Negative correction = too dark = turn right (slow down right motor)
-            left_velocity = base_velocity - correction
-            right_velocity = base_velocity + correction
-            
-            # Clamp velocities to [min_velocity, max_velocity]
-            left_velocity = min(max_velocity, max(min_velocity, left_velocity))
-            right_velocity = min(max_velocity, max(min_velocity, right_velocity))
-            turn_mode = "GENTLE TURN"
+            # In-place turn: motors spin in opposite directions
+            turn_speed = max(min_velocity, base_velocity + abs(correction))
+            turn_speed = min(max_velocity, turn_speed)
+            if error > 0:
+                # Too bright => turn left (left reverse, right forward)
+                left_velocity = -turn_speed
+                right_velocity = turn_speed
+            else:
+                # Too dark => turn right (left forward, right reverse)
+                left_velocity = turn_speed
+                right_velocity = -turn_speed
         
-        # Slew-rate limit: prevent sudden velocity changes
-        left_velocity = prev_left + np.clip(left_velocity - prev_left, -max_delta, max_delta)
-        right_velocity = prev_right + np.clip(right_velocity - prev_right, -max_delta, max_delta)
-        prev_left, prev_right = left_velocity, right_velocity
-        
-        # Update error history for next derivative calculation
-        prev_error = raw_error
+        # Clamp signed velocities to min/max magnitude
+        left_velocity = max(-max_velocity, min(max_velocity, left_velocity))
+        right_velocity = max(-max_velocity, min(max_velocity, right_velocity))
+        if 0 < abs(left_velocity) < min_velocity:
+            left_velocity = min_velocity if left_velocity > 0 else -min_velocity
+        if 0 < abs(right_velocity) < min_velocity:
+            right_velocity = min_velocity if right_velocity > 0 else -min_velocity
         
         # Send velocity commands to motors (rad/s)
         # Left motor reversed, right motor not reversed
         left_motor.velocity_command = -left_velocity
         right_motor.velocity_command = right_velocity
         
-        # Debug output with IMU readings
-        # gyro = imu.gyro
-        # accel = imu.accel
-        # mag = imu.mag
-        # gyro_str = np.array2string(gyro, precision=2, separator=",", suppress_small=True)
-        # accel_str = np.array2string(accel, precision=2, separator=",", suppress_small=True)
-        # mag_str = np.array2string(mag, precision=2, separator=",", suppress_small=True)
-
-        print(f"Lux: {luxSample:6.1f} | Err: {raw_error:5.2f} D: {d_error:5.2f} | {turn_mode:12s} | "
-              f"L: {left_velocity:5.2f} R: {right_velocity:5.2f} | "
-              f"Gyro: {gyro_str} Accel: {accel_str} Mag: {mag_str}")
+        # Debug output with actual velocities from encoders
+        print(f"Lux: {luxSample:6.1f} | Error: {error:6.1f} | "
+              f"L_cmd: {left_velocity:5.2f} L_act: {left_motor.velocity:5.2f} | "
+              f"R_cmd: {right_velocity:5.2f} R_act: {right_motor.velocity:5.2f}")
         
-        time.sleep(dt)  # 20Hz control loop
+        time.sleep(0.01)  # 20Hz control loop
 
 except KeyboardInterrupt:
     # Stop motors when program exits

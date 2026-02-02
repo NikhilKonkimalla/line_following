@@ -28,52 +28,38 @@ plink.connect()
 left_motor.control_mode = ControlMode.POWER
 right_motor.control_mode = ControlMode.POWER
 
-def odometry(powers):
-    count = 0
-    values = {}
-    for l, r in powers:
-        left_motor.power_command = l
-        right_motor.power_command = r
-
-        values[count] = [(right_motor.position, right_motor.velocity), (left_motor.position, left_motor.velocity)]
-
-        time.sleep(3)
-
-    linear_velocity = 0
-    x, y = 0
-    theta = 0
-    omega = 0
-    r = 1.125
+def odometry(powers, sample_time=3.0, dt=0.1):
+    # Wheel/robot geometry (inches)
+    wheel_radius = 1.125
     wheel_base = 5.5
-    position = [x, y, theta]
 
-    for i in range(3):
-        right_velocity = values[count][0][1]
-        left_velocity = values[count][1][1]
-        velocity = (right_velocity+left_velocity)/2
+    x, y, theta = 0.0, 0.0, 0.0
 
-        omega = (r*right_velocity-r*left_velocity)/wheel_base
+    for l, r_cmd in powers:
+        left_motor.power_command = l
+        right_motor.power_command = -r_cmd
 
-        k_00 = velocity*math.cos(theta)
-        k_01 = velocity*math.sin(theta)
-        k_02 = omega
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < sample_time:
+            left_w = left_motor.velocity   # rad/s
+            right_w = -right_motor.velocity # rad/s
 
-        k_10 = velocity*math.cos(theta+3/2*k_02)
-        k_11 = velocity*math.sin(theta+3/2*k_02)
-        k_12 = omega
+            # Print live motor velocities
+            print(
+                f"Motor velocities | Left: {left_w:.2f} rad/s | Right: {right_w:.2f} rad/s"
+            )
 
-        k_20 = velocity*math.cos(theta+3/2*k_12)
-        k_21 = velocity*math.sin(theta+3/2*k_12)
-        k_22 = omega
+            # Convert wheel angular velocity to linear velocity at the ground
+            v = wheel_radius * (right_w + left_w) / 2.0
+            omega = (wheel_radius * (right_w - left_w)) / wheel_base
 
-        k_30 = velocity*math.cos(theta+3*k_22)
-        k_31 = velocity*math.sin(theta+3*k_22)
-        k_32 = omega
+            # Simple Euler integration for odometry
+            x += v * math.cos(theta) * dt
+            y += v * math.sin(theta) * dt
+            theta += omega * dt
 
-        x = x+3/6(k_00+2(k_10+k_20)+k_30)
-        y = y+3/6(k_01+2(k_11+k_21)+k_31)
-        theta = theta+3/6(k_02+2(k_12+k_22)+k_32)
-    
+            time.sleep(dt)
+
     return [x, y, theta]
 
-print(odometry([[0.3, 0.75], [-0.5, 0.5], [-0.3, 0]]))
+print(odometry([[1, 1], [1, 1], [1, 1]]))
