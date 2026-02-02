@@ -13,8 +13,8 @@ plink = Plink()
 plink.power_supply_voltage = 9.6  # Set to our battery voltage
 
 # Set up motor channels - 1 motor per side
-left_motor = plink.channel1
-right_motor = plink.channel2
+left_motor = plink.channel2
+right_motor = plink.channel1
 
 # Set motor voltage limits (default is 0)
 left_motor.motor_voltage_limit = 6.0
@@ -23,9 +23,17 @@ right_motor.motor_voltage_limit = 6.0
 # Connect to the board
 plink.connect()
 
-# Set control mode to POWER (i.e. simple)
-left_motor.control_mode = ControlMode.POWER
-right_motor.control_mode = ControlMode.POWER
+# Set control mode to VELOCITY (uses encoders for consistent speed)
+left_motor.control_mode = ControlMode.VELOCITY
+right_motor.control_mode = ControlMode.VELOCITY
+
+# Set velocity PID gains (P, I, D) - may need tuning for your motors
+left_motor.set_velocity_pid_gains(4.5, 0.1, 0.0)
+right_motor.set_velocity_pid_gains(4.5, 0.1, 0.0)
+
+# Ensure motors are stopped during calibration
+left_motor.velocity_command = 0.0
+right_motor.velocity_command = 0.0
 
 #Calibration on white
 print("BEGIN CALIBRATION WHITE")
@@ -57,17 +65,18 @@ time.sleep(5)
 
 #TUNING INSTRUCTIONS
 #--------------------------------------------------------------#
-# gain: Controls how aggressively robot corrects (0.1 - 0.5 recommended)
-# base_speed: Base forward speed (0.0 - 1.0)
-# correction_limit: Maximum correction to prevent over-steering
-# Sample size: Increase if calibration is inconsistent
+# gain: Controls how aggressively robot corrects
+# base_velocity: Base forward velocity in rad/s
+# correction_limit: Maximum velocity correction to prevent over-steering
+# min_velocity: Minimum velocity to keep wheels always moving
+# Velocity PID gains: Tune if motors don't track velocity well
 #--------------------------------------------------------------#
 
-# PID Control parameters
-gain = 0.2             # Proportional gain (start low, increase if sluggish)
-base_speed = 0.8      # Base forward speed (0.0 to 1.0)
-correction_limit = 0.3  # Max correction to prevent wild turns
-min_speed = 0.15       # Minimum speed to keep wheels always moving
+# Velocity Control parameters
+gain = 0.3              # Proportional gain (increased for sharper turns)
+base_velocity = 2     # Base forward velocity in rad/s
+correction_limit = 2.0  # Max velocity correction in rad/s
+min_velocity = 0.5      # Minimum velocity in rad/s
 
 print("Starting line following...")
 
@@ -75,13 +84,12 @@ try:
     while True:
         luxSample = sensor.lux
         error = luxSample - edgeThreshold
-        
+
         # Apply deadzone - if error is small, go straight (no correction)
         if abs(error) < deadzone:
-            # In deadzone: both motors at same speed for straight line
-            correction = 0.0
-            left_power = base_speed
-            right_power = base_speed
+            # In deadzone: both motors at same velocity for straight line
+            left_velocity = base_velocity
+            right_velocity = base_velocity
         else:
             # Outside deadzone: apply steering correction
             # Reduce error by deadzone amount to smooth transition
@@ -96,29 +104,28 @@ try:
             
             # Positive correction = too bright = turn left (slow down left motor)
             # Negative correction = too dark = turn right (slow down right motor)
-            left_power = base_speed - correction
-            right_power = base_speed + correction
+            left_velocity = base_velocity - correction
+            right_velocity = base_velocity + correction
         
-        # motor power range [min_speed, 1.0] - always moving, never backwards
-        left_power = max(min_speed, min(1.0, left_power))
-        right_power = max(min_speed, min(1.0, right_power))
+        # Clamp velocities to minimum (always moving forward, never backwards)
+        left_velocity = max(min_velocity, left_velocity)
+        right_velocity = max(min_velocity, right_velocity)
         
-        # Send power to motors (reversed with negative sign)
-        left_motor.power_command = -left_power
-        right_motor.power_command = -right_power
+        # Send velocity commands to motors (rad/s)
+        # Left motor reversed, right motor not reversed
+        left_motor.velocity_command = -left_velocity
+        right_motor.velocity_command = right_velocity
         
-        # Debug output
+        # Debug output with actual velocities from encoders
         print(f"Lux: {luxSample:6.1f} | Error: {error:6.1f} | "
-              f"Correction: {correction:6.2f} | L: {left_power:5.2f} R: {right_power:5.2f}")
-        
-        # Optional: Read encoder positions for debugging
-        # print(f"Encoders - L: {left_motor.position:.2f} R: {right_motor.position:.2f}")
+              f"L_cmd: {left_velocity:5.2f} L_act: {left_motor.velocity:5.2f} | "
+              f"R_cmd: {right_velocity:5.2f} R_act: {right_motor.velocity:5.2f}")
         
         time.sleep(0.05)  # 20Hz control loop
 
 except KeyboardInterrupt:
     # Stop motors when program exits
     print("\nStopping motors...")
-    left_motor.power_command = 0.0
-    right_motor.power_command = 0.0
+    left_motor.velocity_command = 0.0
+    right_motor.velocity_command = 0.0
     print("Program terminated.")
