@@ -101,14 +101,14 @@ min_velocity = 0.1         # Minimum velocity in rad/s
 max_velocity = 4         # Maximum velocity cap
 
 # Sharp turn parameters (large errors)
-sharp_turn_threshold = 0.3       # Normalized error above this = sharp turn
+sharp_turn_threshold = 0.25       # Normalized error above this = sharp turn
 sharp_turn_p_gain = 8.0          # Higher P gain for aggressive turning
 sharp_turn_d_gain = 2.0          # Higher D gain for sharp turns
 sharp_turn_base_velocity = 1.0   # Slower base speed during sharp turns
 sharp_turn_min_velocity = 0.05   # Allow wheel to almost stop
 
 # Lost line recovery (completely off the line)
-lost_line_threshold = 0.4        # Normalized error above this = lost line (left edge only)
+lost_line_threshold = 0.3        # Normalized error above this = lost line (left edge only)
 recovery_speed = 0.6             # Slow speed while searching
 recovery_turn_speed = 0.8        # Speed of wheel that's turning to find line
 lost_line_countdown = 0          # Tracks recent "on black" detections
