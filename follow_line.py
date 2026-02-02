@@ -95,10 +95,10 @@ stop_motors()
 # PD Control gains
 p_gain = 5.0               # Proportional gain in (rad/s) per normalized error
 d_gain = 1.5               # Derivative gain - reduces oscillation and overshooting
-base_velocity = 3.5          # Base speed for gentle turns
+base_velocity = 4         # Base speed for gentle turns
 correction_limit = 1.5     # Max velocity correction in rad/s
 min_velocity = 0.1         # Minimum velocity in rad/s
-max_velocity = 4         # Maximum velocity cap
+max_velocity = 5         # Maximum velocity cap
 
 # Sharp turn parameters (large errors)
 sharp_turn_threshold = 0.25       # Normalized error above this = sharp turn
@@ -106,13 +106,6 @@ sharp_turn_p_gain = 8.0          # Higher P gain for aggressive turning
 sharp_turn_d_gain = 2.0          # Higher D gain for sharp turns
 sharp_turn_base_velocity = 1.0   # Slower base speed during sharp turns
 sharp_turn_min_velocity = 0.05   # Allow wheel to almost stop
-
-# Lost line recovery (completely off the line)
-lost_line_threshold = 0.3        # Normalized error above this = lost line (left edge only)
-recovery_speed = 0.6             # Slow speed while searching
-recovery_turn_speed = 0.8        # Speed of wheel that's turning to find line
-lost_line_countdown = 0          # Tracks recent "on black" detections
-lost_line_countdown_max = 5      # Require recent black before lost-line recovery
 
 # PD control state tracking
 prev_error = 0.0                 # Previous error for derivative calculation
@@ -136,12 +129,6 @@ try:
         # Calculate derivative using raw error only
         d_error = (raw_error - prev_error) / dt
 
-        # Update "recently on black" state (right edge following)
-        if raw_error < -deadzone_norm:
-            lost_line_countdown = lost_line_countdown_max
-        else:
-            lost_line_countdown = max(0, lost_line_countdown - 1)
-
         # Apply deadzone - if error is small, go straight (no correction)
         if abs(raw_error) < deadzone_norm:
             # In deadzone: both motors at same velocity for straight line
@@ -149,27 +136,33 @@ try:
             right_velocity = base_velocity
             turn_mode = "STRAIGHT"
             
-        elif raw_error > lost_line_threshold:
-            # POSSIBLE LOST LINE: Too bright (white)
-            if lost_line_countdown > 0:
-                # LOST LINE MODE: Drifted OFF line onto white over left edge
-                left_velocity = recovery_turn_speed   # Left motor faster
-                right_velocity = recovery_speed        # Right motor slower
-                turn_mode = "LOST - RIGHT"
-            else:
-                # Too bright but likely drifted right; handle with normal control
-                # Treat like gentle turn to get back to right edge
-                adj_error = raw_error - deadzone_norm
-                p_term = p_gain * adj_error
-                d_term = d_gain * d_error
-                correction = p_term + d_term
-                correction = max(-correction_limit, min(correction_limit, correction))
+        elif raw_error > deadzone_norm:
+            # Too bright => too far right of line, turn LEFT to seek right edge
+            adj_error = raw_error - deadzone_norm
+            p_term = p_gain * adj_error
+            d_term = d_gain * d_error
+            correction = p_term + d_term
+            correction = max(-correction_limit, min(correction_limit, correction))
 
-                left_velocity = base_velocity - correction
-                right_velocity = base_velocity + correction
-                left_velocity = min(max_velocity, max(min_velocity, left_velocity))
-                right_velocity = min(max_velocity, max(min_velocity, right_velocity))
-                turn_mode = "RIGHT EDGE CORRECT"
+            left_velocity = base_velocity - correction
+            right_velocity = base_velocity + correction
+            left_velocity = min(max_velocity, max(min_velocity, left_velocity))
+            right_velocity = min(max_velocity, max(min_velocity, right_velocity))
+            turn_mode = "SEEK RIGHT EDGE"
+
+        elif raw_error < -deadzone_norm:
+            # Too dark => too far left of line, turn RIGHT to seek right edge
+            adj_error = raw_error + deadzone_norm
+            p_term = p_gain * adj_error
+            d_term = d_gain * d_error
+            correction = p_term + d_term
+            correction = max(-correction_limit, min(correction_limit, correction))
+
+            left_velocity = base_velocity - correction
+            right_velocity = base_velocity + correction
+            left_velocity = min(max_velocity, max(min_velocity, left_velocity))
+            right_velocity = min(max_velocity, max(min_velocity, right_velocity))
+            turn_mode = "SEEK RIGHT EDGE"
             
         elif abs(raw_error) > sharp_turn_threshold:
             # SHARP TURN MODE: Large error detected, apply aggressive turning
@@ -233,12 +226,12 @@ try:
         right_motor.velocity_command = right_velocity
         
         # Debug output with IMU readings
-        gyro = imu.gyro
-        accel = imu.accel
-        mag = imu.mag
-        gyro_str = np.array2string(gyro, precision=2, separator=",", suppress_small=True)
-        accel_str = np.array2string(accel, precision=2, separator=",", suppress_small=True)
-        mag_str = np.array2string(mag, precision=2, separator=",", suppress_small=True)
+        # gyro = imu.gyro
+        # accel = imu.accel
+        # mag = imu.mag
+        # gyro_str = np.array2string(gyro, precision=2, separator=",", suppress_small=True)
+        # accel_str = np.array2string(accel, precision=2, separator=",", suppress_small=True)
+        # mag_str = np.array2string(mag, precision=2, separator=",", suppress_small=True)
 
         print(f"Lux: {luxSample:6.1f} | Err: {raw_error:5.2f} D: {d_error:5.2f} | {turn_mode:12s} | "
               f"L: {left_velocity:5.2f} R: {right_velocity:5.2f} | "
