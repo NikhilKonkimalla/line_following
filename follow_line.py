@@ -95,7 +95,7 @@ stop_motors()
 # PD Control gains
 p_gain = 5.0               # Proportional gain in (rad/s) per normalized error
 d_gain = 1.5               # Derivative gain - reduces oscillation and overshooting
-base_velocity = 3.5          # Base speed for gentle turns
+base_velocity = 4         # Base speed for gentle turns
 correction_limit = 1.5     # Max velocity correction in rad/s
 min_velocity = 0.1         # Minimum velocity in rad/s
 max_velocity = 4         # Maximum velocity cap
