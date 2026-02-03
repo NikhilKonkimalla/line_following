@@ -28,52 +28,77 @@ plink.connect()
 left_motor.control_mode = ControlMode.POWER
 right_motor.control_mode = ControlMode.POWER
 
-def odometry(powers):
-    count = 0
-    values = {}
-    for l, r in powers:
+def odometry(powers, sample_time=3.0, dt=0.07, start_threshold=0.0001, ma_window=10):
+    # Wheel/robot geometry (inches)
+    wheel_radius = 1.1
+    wheel_base = 5.25
+    right_sign = -1.0  # Set to -1.0 if right encoder direction is reversed
+
+    x, y, theta = 0.0, 0.0, 0.0
+    left_hist = []
+    right_hist = []
+
+    for l, r_cmd in powers:
         left_motor.power_command = l
-        right_motor.power_command = r
+        right_motor.power_command = -r_cmd
 
-        values[count] = [(right_motor.position, right_motor.velocity), (left_motor.position, left_motor.velocity)]
+        # Wait for motors to start moving (avoid integrating zeros)
+        while True:
+            left_w = left_motor.velocity
+            right_w = right_sign * right_motor.velocity
+            if abs(left_w) >= start_threshold or abs(right_w) >= start_threshold:
+                break
+            time.sleep(0.01)
 
-        time.sleep(3)
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < sample_time:
+            left_w = left_motor.velocity   # rad/s
+            right_w = right_sign * right_motor.velocity # rad/s (sign-corrected)
 
-    linear_velocity = 0
-    x, y = 0
-    theta = 0
-    omega = 0
-    r = 1.125
-    wheel_base = 5.5
-    position = [x, y, theta]
+            # Moving average filter for encoder velocities
+            left_hist.append(left_w)
+            right_hist.append(right_w)
+            if len(left_hist) > ma_window:
+                left_hist.pop(0)
+                right_hist.pop(0)
+            left_w = sum(left_hist) / len(left_hist)
+            right_w = sum(right_hist) / len(right_hist)
 
-    for i in range(3):
-        right_velocity = values[count][0][1]
-        left_velocity = values[count][1][1]
-        velocity = (right_velocity+left_velocity)/2
+            # Print live motor velocities
+            print(
+                f"Motor velocities | Left: {left_w:.2f} rad/s | Right: {right_w:.2f} rad/s"
+            )
 
-        omega = (r*right_velocity-r*left_velocity)/wheel_base
+            # Convert wheel angular velocity to linear velocity at the ground
+            v = wheel_radius * (right_w + left_w) / 2.0
+            omega = (wheel_radius * (right_w - left_w)) / wheel_base
 
-        k_00 = velocity*math.cos(theta)
-        k_01 = velocity*math.sin(theta)
-        k_02 = omega
+            # Runge-Kutta 4th order integration (RK4)
+            k1_x = v * math.cos(theta)
+            k1_y = v * math.sin(theta)
+            k1_t = omega
 
-        k_10 = velocity*math.cos(theta+3/2*k_02)
-        k_11 = velocity*math.sin(theta+3/2*k_02)
-        k_12 = omega
+            k2_x = v * math.cos(theta + 0.5 * dt * k1_t)
+            k2_y = v * math.sin(theta + 0.5 * dt * k1_t)
+            k2_t = omega
 
-        k_20 = velocity*math.cos(theta+3/2*k_12)
-        k_21 = velocity*math.sin(theta+3/2*k_12)
-        k_22 = omega
+            k3_x = v * math.cos(theta + 0.5 * dt * k2_t)
+            k3_y = v * math.sin(theta + 0.5 * dt * k2_t)
+            k3_t = omega
 
-        k_30 = velocity*math.cos(theta+3*k_22)
-        k_31 = velocity*math.sin(theta+3*k_22)
-        k_32 = omega
+            k4_x = v * math.cos(theta + dt * k3_t)
+            k4_y = v * math.sin(theta + dt * k3_t)
+            k4_t = omega
 
-        x = x+3/6(k_00+2(k_10+k_20)+k_30)
-        y = y+3/6(k_01+2(k_11+k_21)+k_31)
-        theta = theta+3/6(k_02+2(k_12+k_22)+k_32)
-    
+            x += (dt / 6.0) * (k1_x + 2.0 * k2_x + 2.0 * k3_x + k4_x)
+            y += (dt / 6.0) * (k1_y + 2.0 * k2_y + 2.0 * k3_y + k4_y)
+            theta += (dt / 6.0) * (k1_t + 2.0 * k2_t + 2.0 * k3_t + k4_t)
+
+            time.sleep(dt)
+        left_motor.power_command = 0
+        right_motor.power_command = 0
+        time.sleep(0.5)
+
     return [x, y, theta]
 
-print(odometry([[0.3, 0.75], [-0.5, 0.5], [-0.3, 0]]))
+print(odometry([[1, 1]]))
