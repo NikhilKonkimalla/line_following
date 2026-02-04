@@ -13,8 +13,8 @@ plink = Plink()
 plink.power_supply_voltage = 9.6  # Set to our battery voltage
 
 # Set up motor channels - 1 motor per side
-left_motor = plink.channel2
-right_motor = plink.channel3
+left_motor = plink.channel3
+right_motor = plink.channel2
 
 # Set motor voltage limits (default is 0)
 left_motor.motor_voltage_limit = 6.0
@@ -55,9 +55,9 @@ meanBlack = sum(blackCal) / len(blackCal)
 edgeThreshold = (meanBlack + meanWhite) / 2
 # Calculate deadzone as a percentage of the total range
 sensor_range = abs(meanWhite - meanBlack)
-deadzone = sensor_range * 0.08  # 8% of range for deadzone
+deadzone = sensor_range * 0.08 # 5 or 7 percent for challenge and 0.08 for base board
 print(f"Average White reading: {meanWhite}")
-print(f"Average Black reading: {meanBlack}")
+print(f"Average Black reading: {meanBlack}") 
 print(f"Resulting edge threshold: {edgeThreshold}")
 print(f"Deadzone range: +/- {deadzone:.1f} lux")
 print("Beginning course traversal in 5 seconds:")
@@ -74,8 +74,8 @@ time.sleep(5)
 
 # Velocity Control parameters
 gain = 0.3              # Proportional gain (increased for sharper turns)
-base_velocity = 4.5
-max_velocity = base_velocity     # Base forward velocity in rad/s
+base_velocity = 7.5 #base board is 7.5, 5.5 challenge is 7, 5
+max_velocity = 5.5    # Base forward velocity in rad/s
 correction_limit = 2.0  # Max velocity correction in rad/s
 min_velocity = 0.5      # Minimum velocity in rad/s
 
@@ -124,14 +124,14 @@ try:
             right_velocity = min_velocity if right_velocity > 0 else -min_velocity
         
         # Send velocity commands to motors (rad/s)
-        # Left motor reversed, right motor not reversed
-        left_motor.velocity_command = -left_velocity
-        right_motor.velocity_command = right_velocity
-        
-        # Debug output with actual velocities from encoders
+        # Gear reverses both wheels: negate both so logical forward => both motors negative => physical forward
+        left_motor.velocity_command = left_velocity 
+        right_motor.velocity_command = -right_velocity
+
+        # Debug output: L_act/R_act in logical convention (match L_cmd/R_cmd)
         print(f"Lux: {luxSample:6.1f} | Error: {error:6.1f} | "
-              f"L_cmd: {left_velocity:5.2f} L_act: {left_motor.velocity:5.2f} | "
-              f"R_cmd: {right_velocity:5.2f} R_act: {right_motor.velocity:5.2f}")
+              f"L_cmd: {left_velocity:5.2f} L_act: {-left_motor.velocity:5.2f} | "
+              f"R_cmd: {right_velocity:5.2f} R_act: {-right_motor.velocity:5.2f}")
         
         time.sleep(0.01)  # 20Hz control loop
 

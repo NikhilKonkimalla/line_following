@@ -28,36 +28,40 @@ plink.connect()
 left_motor.control_mode = ControlMode.POWER
 right_motor.control_mode = ControlMode.POWER
 
-def odometry(powers, sample_time=3.0, dt=0.01):
+def odometry(powers, sample_time=3.0, dt=0.01, velocity_stop_threshold=0.05,
+             coast_stable_count=5, max_coast_time=3.0):
     # Wheel/robot geometry (inches)
-    wheel_radius = 1.2  # Calibrated: 0.652 * (22/18.94) = 0.757 original was 1.1
-    wheel_base = 5.36  # original was 5.25 (best so far is 5.35)
+    wheel_radius = 1.15  # Calibrated: 0.652 * (22/18.94) = 0.757 original was 1.1
+    wheel_base = 6  # original was 5.25 (best so far is 5.35)
+
+    # Coast-down: integrate until both motors below velocity_stop_threshold (rad/s)
+    # for coast_stable_count consecutive samples, or until max_coast_time (s) is reached.
 
     x, y, theta = 0.0, 0.0, 0.0
 
     for left_power, right_power in powers:
+        # Gear reverses both wheels: negate both so logical forward (positive) => both motors negative => physical forward
         left_motor.power_command = left_power
         right_motor.power_command = -right_power
 
         # Wait for motors to start moving before beginning timing
         
         while True:
-            left_w = left_motor.velocity
-            right_w = -right_motor.velocity
+            left_w = left_motor.velocity * 24/40
+            right_w = -right_motor.velocity * 24/40
             if abs(left_w) > 0 or abs(right_w) > 0:
                 print("Motors started, beginning odometry...")
                 break
-            time.sleep(0.01)
         
         start_time = time.monotonic()
         while time.monotonic() - start_time < sample_time:
-            # Read encoder velocities (rad/s)
-            left_w = left_motor.velocity
-            right_w = -right_motor.velocity  # Correct for right motor direction
+            # Read encoder velocities (rad/s) — sign flipped for gear reversal
+            left_w = left_motor.velocity * 24/40
+            right_w = -right_motor.velocity * 24/40
 
             # Calculate robot velocity (inches/s) and angular velocity (rad/s)
             v = wheel_radius * (left_w + right_w) / 2.0
-            omega = wheel_radius * (right_w - left_w) / wheel_base
+            omega = wheel_radius * (left_w - right_w) / wheel_base
 
             # Simple Euler integration
             x += v * math.cos(theta) * dt
@@ -68,44 +72,35 @@ def odometry(powers, sample_time=3.0, dt=0.01):
 
             time.sleep(dt)
         
-        # Stop motors between commands
-        
+        # Stop motors and coast until both below velocity_stop_threshold
         left_motor.power_command = 0
         right_motor.power_command = 0
-        count = 0
-        while count<100:
-            left_w = left_motor.velocity
-            right_w = -right_motor.velocity  # Correct for right motor direction
+        stable_count = 0
+        coast_start = time.monotonic()
+        while stable_count < coast_stable_count: # and (time.monotonic() - coast_start) < max_coast_time
+            left_w = left_motor.velocity * 24/40
+            right_w = -right_motor.velocity * 24/40
 
-            # Calculate robot velocity (inches/s) and angular velocity (rad/s)
             v = wheel_radius * (left_w + right_w) / 2.0
-            omega = wheel_radius * (right_w - left_w) / wheel_base
-
-            # Simple Euler integration
+            omega = wheel_radius * (left_w - right_w) / wheel_base
             x += v * math.cos(theta) * dt
             y += v * math.sin(theta) * dt
             theta += omega * dt
 
+            if abs(left_w) < velocity_stop_threshold and abs(right_w) < velocity_stop_threshold:
+                stable_count += 1
+            else:
+                stable_count = 0
+
             print(f"Left motor={left_w:.2f} rad/s, Right motor={right_w:.2f} rad/s")
             time.sleep(dt)
-            count+=1
-            
-        
+
+
 
     print(f"\nFinal position: x={x:.2f} inches, y={y:.2f} inches, theta={math.degrees(theta):.1f}°")
     return [x, y, theta]
 
 
-print(odometry([[random.uniform(-1, 1), random.uniform(-1, 1)], [random.uniform(-1, 1), random.uniform(-1, 1)], [random.uniform(-1, 1), random.uniform(-1, 1)]]))
-#print(odometry([[0.5, -0.5]]))
-x1, y1 = random.uniform(-1, 1)
-x2, y2 = random.uniform(-1, 1)
-x3, y3 = random.uniform(-1, 1)
+#print(odometry([[random.uniform(-1, 1), random.uniform(-1, 1)], [random.uniform(-1, 1), random.uniform(-1, 1)], [random.uniform(-1, 1), random.uniform(-1, 1)]]))
+print(odometry([[0.7, 0.9], [0.55, -0.55], [1, 1]]))
 
-print(odometry([[x1, y1], [x2, y2], [x3, y3]]))
-print("l1: " + x1)
-print("r1: " + y1)
-print("l2: " + x2)
-print("r2: " + y2)
-print("l3: " + x3)
-print("r3: " + y3)
