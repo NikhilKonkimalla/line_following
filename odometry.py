@@ -28,7 +28,7 @@ plink.connect()
 left_motor.control_mode = ControlMode.POWER
 right_motor.control_mode = ControlMode.POWER
 
-def odometry(powers, sample_time=3.0, dt=0.07, start_threshold=0.0001, ma_window=10):
+def odometry(powers, sample_time=3.0, dt=0.07, start_threshold=0.0001, ma_window=10, deadband=0.5):
     # Wheel/robot geometry (inches)
     wheel_radius = 1.1
     wheel_base = 5.25
@@ -54,6 +54,12 @@ def odometry(powers, sample_time=3.0, dt=0.07, start_threshold=0.0001, ma_window
         while time.monotonic() - start_time < sample_time:
             left_w = left_motor.velocity   # rad/s
             right_w = right_sign * right_motor.velocity # rad/s (sign-corrected)
+
+            # Apply deadband to filter out noise
+            if abs(left_w) < deadband:
+                left_w = 0.0
+            if abs(right_w) < deadband:
+                right_w = 0.0
 
             # Moving average filter for encoder velocities
             left_hist.append(left_w)
