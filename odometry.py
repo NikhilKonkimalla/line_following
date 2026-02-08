@@ -102,5 +102,5 @@ def odometry(powers, sample_time=3.0, dt=0.01, velocity_stop_threshold=0.05,
 
 
 #print(odometry([[random.uniform(-1, 1), random.uniform(-1, 1)], [random.uniform(-1, 1), random.uniform(-1, 1)], [random.uniform(-1, 1), random.uniform(-1, 1)]]))
-print(odometry([[0.7, 0.9], [0.55, -0.55], [1, 1]]))
+print(odometry([[-0.9, -0.72], [0.63, -0.4], [-0.5, 0.87]]))
 

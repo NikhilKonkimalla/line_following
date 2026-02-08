@@ -42,7 +42,7 @@ time.sleep(3)
 # readings don't change between iterations
 whiteCal = [sensor.lux for _ in range (20)]
 meanWhite = sum(whiteCal) / len(whiteCal)
-
+#meanWhite = 80
 #Calibration on black
 print("BEGIN CALIBRATION BLACK")
 time.sleep(3)
@@ -50,18 +50,18 @@ time.sleep(3)
 # readings don't change between iterations
 blackCal = [sensor.lux for _ in range(20)] 
 meanBlack = sum(blackCal) / len(blackCal)
-
+#meanBlack = 45
 #Caluculate Threshold
 edgeThreshold = (meanBlack + meanWhite) / 2
 # Calculate deadzone as a percentage of the total range
 sensor_range = abs(meanWhite - meanBlack)
-deadzone = sensor_range * 0.08 # 5 or 7 percent for challenge and 0.08 for base board
+deadzone = sensor_range * 0.05 # 5 or 7 percent for challenge and 0.08 for base board
 print(f"Average White reading: {meanWhite}")
 print(f"Average Black reading: {meanBlack}") 
 print(f"Resulting edge threshold: {edgeThreshold}")
 print(f"Deadzone range: +/- {deadzone:.1f} lux")
 print("Beginning course traversal in 5 seconds:")
-time.sleep(5)
+time.sleep(10)
 
 #TUNING INSTRUCTIONS
 #--------------------------------------------------------------#
@@ -74,8 +74,8 @@ time.sleep(5)
 
 # Velocity Control parameters
 gain = 0.3              # Proportional gain (increased for sharper turns)
-base_velocity = 7.5 #base board is 7.5, 5.5 challenge is 7, 5
-max_velocity = 5.5    # Base forward velocity in rad/s
+base_velocity = 7 #base board is 7.5, 5.5 challenge is 7, 5
+max_velocity = 5   # Base forward velocity in rad/s
 correction_limit = 2.0  # Max velocity correction in rad/s
 min_velocity = 0.5      # Minimum velocity in rad/s
 
