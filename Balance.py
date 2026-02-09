@@ -9,7 +9,7 @@ plink = Plink()
 plink.power_supply_voltage = 9.6
 
 left_motor = plink.channel1
-right_motor = plink.channel2
+right_motor = plink.channel3
 
 left_motor.motor_voltage_limit = 6.0
 right_motor.motor_voltage_limit = 6.0
@@ -29,7 +29,7 @@ gx_sum = 0.0
 dt_cal = 0.005
 for _ in range(N):
     g = imu.gyro
-    gx_sum += g[0] 
+    gx_sum += g[1] 
     time.sleep(dt_cal)
 
 gyro_bias_coarse = gx_sum / N
@@ -40,7 +40,7 @@ def clamp(x, lo, hi):
 
 #Should be calculating pitch about the x-axis
 def accel_pitch(ax, ay, az):
-    return math.degrees(math.atan2(ay, az))
+    return math.degrees(math.atan2(ax, az))
 
 
 # -----------------------
@@ -120,17 +120,17 @@ def kalman_update(theta_meas_deg, gyro_rate_deg_s, dt):
 # PD/PID controller
 theta_set = 0.0  # adjust for any base theta error
 
-Kp = 50
-Kd = 0.18
-Ki = 2
+Kp = 1
+Kd = 2.5
+Ki = 0
 deadzone = 5 #in degrees
 
 integral = 0.0
-integral_limit = 1.0 #0 for now, we will determine if we need it later
+integral_limit = 0.0 #0 for now, we will determine if we need it later
 
 max_u = 6.0  # voltage limit
-pushP = 0
-pushD = 0
+pushP = 1
+pushD = 1
 pipeD = []
 pipeP = []
 
@@ -169,33 +169,33 @@ try:
         #This does a sort of sliding window that validates all three
         #Readings to make sure they are the same sign so that the freaky
         #Shaking doesn't occur.
-        if len(pipeP) < 3:
-            pipeP.append(theta)
-        elif (0 <= x for x in pipeP) or (x <= 0 for x in pipeP):
-            pushP.pop(0)
-            pushP.append(theta)
-            pushP = 1
-        else:
-            pushP.pop(0)
-            pushP.append(theta)
-            pushP = 0
+        # if len(pipeP) < 3:
+        #     pipeP.append(theta)
+        # elif (0 <= x for x in pipeP) or (x <= 0 for x in pipeP):
+        #     pipeP.pop(0)
+        #     pipeP.append(theta)
+        #     pushP = 1
+        # else:
+        #     pipeP.pop(0)
+        #     pipeP.append(theta)
+        #     pushP = 0.1
         
-        if len(pipeD) < 3:
-            pipeD.append(gx)
-        elif (0 <= x for x in pipeD) or (x <= 0 for x in pipeD):
-            pushD.pop(0)
-            pushD.append(gx)
-            pushD = 1
-        else:
-            pushD.pop(0)
-            pushD.append(gx)
-            pushD = 0
+        # if len(pipeD) < 3:
+        #     pipeD.append(gx)
+        # elif (0 <= x for x in pipeD) or (x <= 0 for x in pipeD):
+        #     pipeD.pop(0)
+        #     pipeD.append(gx)
+        #     pushD = 1
+        # else:
+        #     pipeD.pop(0)
+        #     pipeD.append(gx)
+        #     pushD = 0.1
 
         
         u = pushP * Kp * error + pushD * Kd * gyro_rate + Ki * integral
         u = clamp(u, -max_u, max_u)
 
-        left_motor.power_command = u
+        left_motor.power_command = -u
         right_motor.power_command = u
 
         # This stops the robot if it has already fallen over
