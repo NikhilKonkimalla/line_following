@@ -29,7 +29,7 @@ gx_sum = 0.0
 dt_cal = 0.005
 for _ in range(N):
     g = imu.gyro
-    gx_sum += g[1] 
+    gx_sum += g[0] 
     time.sleep(dt_cal)
 
 gyro_bias_coarse = gx_sum / N
@@ -40,7 +40,7 @@ def clamp(x, lo, hi):
 
 #Should be calculating pitch about the x-axis
 def accel_pitch(ax, ay, az):
-    return math.degrees(math.atan2(ax, az))
+    return math.degrees(math.atan2(ay, az))
 
 
 # -----------------------
@@ -121,7 +121,7 @@ def kalman_update(theta_meas_deg, gyro_rate_deg_s, dt):
 theta_set = 0.0  # adjust for any base theta error
 
 Kp = 1
-Kd = 2.5
+Kd = 0
 Ki = 0
 deadzone = 5 #in degrees
 
