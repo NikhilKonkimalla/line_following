@@ -9,15 +9,18 @@ plink = Plink()
 plink.power_supply_voltage = 9.6
 
 left_motor = plink.channel1
-right_motor = plink.channel2
+left_motor2 = plink.channel3
+right_motor = plink.channel4
 
 left_motor.motor_voltage_limit = 6.0
+left_motor2.motor_voltage_limit = 6.0
 right_motor.motor_voltage_limit = 6.0
 
 plink.connect()
 imu = plink.imu
 
 left_motor.control_mode = ControlMode.POWER
+left_motor2.control_mode = ControlMode.POWER
 right_motor.control_mode = ControlMode.POWER
 
 # Calibrate gyro bias
@@ -118,24 +121,20 @@ def kalman_update(theta_meas_deg, gyro_rate_deg_s, dt):
 
 
 # PD/PID controller
-theta_set = 0.0  # adjust for any base theta error
+theta_set = -0.67  # adjust for any base theta error
 
-Kp = 50
-Kd = 0.18
-Ki = 2
-deadzone = 5 #in degrees
+Kp = 0.4
+Kd = 0.0000001
+Ki = 0
 
 integral = 0.0
-integral_limit = 1.0 #0 for now, we will determine if we need it later
+integral_limit = 0 # 0 disables integral action until enabled
+prev_error = 0.0
 
 max_u = 6.0  # voltage limit
-pushP = 0
-pushD = 0
-pipeD = []
-pipeP = []
 
 # Main loop timing
-dt_target = 0.01  # 200 Hz
+dt_target = 0.01  # 100 Hz
 t_prev = time.monotonic()
 
 try:
@@ -159,50 +158,27 @@ try:
         # Apply Kalman fuse
         theta_est, bias_est = kalman_update(theta_acc, gyro_rate, dt)
 
-        # Control error (i.e. how much the robot has tipped)
-        error = (theta_est - theta_set)
-
-        #Here just in case we want to use it
+        # Raw PID control law.
+        error = theta_set - theta_est
         integral += error * dt
         integral = clamp(integral, -integral_limit, integral_limit)
+        derivative = (error - prev_error) / dt
+        prev_error = error
+        u = Kp * error + Ki * integral + Kd * derivative
 
-        #This does a sort of sliding window that validates all three
-        #Readings to make sure they are the same sign so that the freaky
-        #Shaking doesn't occur.
-        if len(pipeP) < 3:
-            pipeP.append(theta)
-        elif (0 <= x for x in pipeP) or (x <= 0 for x in pipeP):
-            pushP.pop(0)
-            pushP.append(theta)
-            pushP = 1
-        else:
-            pushP.pop(0)
-            pushP.append(theta)
-            pushP = 0
-        
-        if len(pipeD) < 3:
-            pipeD.append(gx)
-        elif (0 <= x for x in pipeD) or (x <= 0 for x in pipeD):
-            pushD.pop(0)
-            pushD.append(gx)
-            pushD = 1
-        else:
-            pushD.pop(0)
-            pushD.append(gx)
-            pushD = 0
-
-        
-        u = pushP * Kp * error + pushD * Kd * gyro_rate + Ki * integral
         u = clamp(u, -max_u, max_u)
 
-        left_motor.power_command = u
+        left_motor.power_command = -u
+        left_motor2.power_command = -u
         right_motor.power_command = u
 
         # This stops the robot if it has already fallen over
         if abs(theta_est) > 80:
             left_motor.power_command = 0.0
+            left_motor2.power_command = 0.0
             right_motor.power_command = 0.0
             integral = 0.0
+            prev_error = 0.0
 
         # Maintain loop rate
         sleep_time = dt_target - (time.monotonic() - t_now)
@@ -216,5 +192,6 @@ try:
 
 except KeyboardInterrupt:
     left_motor.power_command = 0.0
+    left_motor2.power_command = 0.0
     right_motor.power_command = 0.0
     print("\nStopped.")
