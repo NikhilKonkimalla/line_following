@@ -8,19 +8,21 @@ i2c = board.I2C()
 plink = Plink()
 plink.power_supply_voltage = 9.6
 
+#Set motor channels
 left_motor = plink.channel4
-left_motor2 = plink.channel1
+#left_motor2 = plink.channel1
 right_motor = plink.channel3
 
+#Set motor voltage limit
 left_motor.motor_voltage_limit = 6.0
-left_motor2.motor_voltage_limit = 6.0
+#left_motor2.motor_voltage_limit = 6.0
 right_motor.motor_voltage_limit = 6.0
 
 plink.connect()
 imu = plink.imu
 
 left_motor.control_mode = ControlMode.POWER
-left_motor2.control_mode = ControlMode.POWER
+#left_motor2.control_mode = ControlMode.POWER
 right_motor.control_mode = ControlMode.POWER
 
 # Calibrate gyro bias
@@ -108,7 +110,7 @@ def kalman_update(theta_meas_deg, gyro_rate_deg_s, dt):
     theta = theta + K0 * y
     bias  = bias  + K1 * y
 
-    # Covariance update (Joseph form not necessary here; standard works fine)
+    # Covariance update
     P00_old = P00
     P01_old = P01
 
@@ -121,24 +123,25 @@ def kalman_update(theta_meas_deg, gyro_rate_deg_s, dt):
 
 
 # PD/PID controller
-theta_set = -1.1 # adjust for any base theta error
+theta_set = -1.21 # adjust for any base theta error
 
-Kp = 0.4
-Kd = 0.0015
+Kp = 0.43
+Kd = 0.00014
 Ki = 0
 
-integral = 0.0
+integral = 0
 integral_limit = 0 # 0 disables integral action until enabled
 prev_error = 0.0
 
 max_u = 6.0  # voltage limit
 
 # Main loop timing
-dt_target = 0.01  # 100 Hz
+dt_target = 0.0075 # < 100 Hz
 t_prev = time.monotonic()
 
 try:
     while True:
+        #maintain timing
         t_now = time.monotonic()
         dt = t_now - t_prev
         if dt <= 0:
@@ -164,18 +167,19 @@ try:
         integral = clamp(integral, -integral_limit, integral_limit)
         derivative = (error - prev_error) / dt
         prev_error = error
-        u = Kp * error + Ki * integral + Kd * derivative
+        #Calculation of u (i.e. the power to motors)
+        u = Kp * error + Ki * integral + Kd * derivative 
 
+        #Ensure u does not exceed abs(6)
         u = clamp(u, -max_u, max_u)
-
         left_motor.power_command = u
-        left_motor2.power_command = u
+        #left_motor2.power_command = u
         right_motor.power_command = -u
 
         # This stops the robot if it has already fallen over
         if abs(theta_est) > 80:
             left_motor.power_command = 0.0
-            left_motor2.power_command = 0.0
+            #left_motor2.power_command = 0.0
             right_motor.power_command = 0.0
             integral = 0.0
             prev_error = 0.0
