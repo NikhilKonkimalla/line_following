@@ -195,7 +195,7 @@ def construct_map(isEasy, resolution):
     for col in range(x_disc):
         for row in range(y_disc):
             hit = check_obstacles(obstacles, col/RESOLUTION, row/RESOLUTION)
-            img[row, col] = [hit * 255, 0, 0]
+            img[row][col] = [hit * 255, 0, 0]
 
     return img
 
