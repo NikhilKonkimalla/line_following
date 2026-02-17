@@ -1,8 +1,14 @@
+import math
+from collections import deque
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 import construct_map as cm  # your provided map constructor
-
+# ----------------------------
+# Constants / direction helpers
+# ----------------------------
+DIR_ORDER = ["N", "E", "S", "W"]  # clockwise
 
 
 # ----------------------------
