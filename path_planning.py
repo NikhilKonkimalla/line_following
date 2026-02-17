@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # path_planning.py
 # Wavefront path planning with 5" clearance (C-space inflation + wall band)
 # Outputs executable commands for NewODO: [("TURN", deg), ("DRIVE", inches), ...]
@@ -6,16 +7,47 @@
 import math
 from collections import deque
 
+=======
+>>>>>>> 0b1c236335102faea770f941ab9cb16d82243d5f
 import numpy as np
 import matplotlib.pyplot as plt
 
 import construct_map as cm  # your provided map constructor
 
 
+<<<<<<< HEAD
 # ----------------------------
 # Constants / direction helpers
 # ----------------------------
 DIR_ORDER = ["N", "E", "S", "W"]  # clockwise
+=======
+def preprocessing(map, end):
+    queue = [end]
+    neighbors = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [-1, -1], [1, -1]]
+    while queue:
+        x, y = queue.pop(0)
+        val = map[x][y]
+        for a, b in neighbors:
+            if x+a<len(map) and 0<=x+a and y+b<len(map[0]) and y+b>=0 and map[x+a][y+b]==0:
+                map[x+a, y+b]=val-1
+                queue.append((x+a, y+b))
+    return map
+
+def wavefront(map, start):
+    queue = [start]
+    visited = [start]
+    neighbors = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [-1, -1], [1, -1]]
+    while queue:
+        x, y = queue.pop(0)
+        val = map[x][y]
+        for a, b in neighbors:
+            if x+a<len(map) and 0<=x+a and y+b<len(map[0]) and y+b>=0:
+                if map[x+a][y+b]-1 == map[x][y] and (x+a, y+b) not in visited:
+                    visited.append((x+a, y+b))
+                    queue.append((x+a, y+b))
+                    break
+    return visited
+>>>>>>> 0b1c236335102faea770f941ab9cb16d82243d5f
 
 
 # ----------------------------
