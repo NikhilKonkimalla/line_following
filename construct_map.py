@@ -205,13 +205,13 @@ def construct_map(isEasy, resolution):
 # that for some reason start with y values, then x values (blame plt, not me)
 
 # Example plt code using img result from construct_map:
-isEasy = False
+isEasy = True
 # Don't have less than 1 resolution...
 # RESOLUTION is the number of points you want per inch
 # (anything larger than 20 takes a while)
 resolution = 4
 img = construct_map(isEasy, resolution)
 
-plt.imshow(img, cmap=plt.cm.gray, origin='lower')
-plt.show()
+#plt.imshow(img, cmap=plt.cm.gray, origin='lower')
+#plt.show()
 
