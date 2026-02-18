@@ -59,7 +59,7 @@ RIGHT_WHEEL_SCALE = 1.00
 # Robot params (inches)
 # ------------------------------
 WHEEL_RADIUS_IN = 1.15
-WHEEL_BASE_IN = 5.25
+WHEEL_BASE_IN = 5.45
 
 # If wheel speed = motor speed * (24/40)
 GEAR_WHEEL_PER_MOTOR = 24 / 40
@@ -126,6 +126,14 @@ def _wrap_pi(a: float) -> float:
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _slew_toward(current: float, target: float, max_delta: float) -> float:
+    return current + _clamp(target - current, -max_delta, max_delta)
+
+
 def update_pose(dt: float):
     """
     Integrate pose using encoder wheel velocities (dead-reckoning).
@@ -155,9 +163,12 @@ def drive_distance(
     k_cte: float = 0.8,
     timeout_s: float = 25.0,
     print_hz: float = 20.0,
+    soft_start_s: float = 0.25,
+    max_wheel_accel: float = 8.0,
 ):
     """
-    Drive forward dist_in inches, with optional heading hold + line hold using odometry theta.
+    Drive forward dist_in inches with optional heading + line hold.
+    Uses startup ramp + slew-limited wheel commands to reduce slip on segment entry.
     """
     if dist_in == 0:
         return
@@ -179,6 +190,8 @@ def drive_distance(
     dist_in = float(dist_in)
     direction = 1.0 if dist_in >= 0 else -1.0
     dist_in = abs(dist_in)
+    cmd_l_sent = 0.0
+    cmd_r_sent = 0.0
 
     while True:
         now = time.monotonic()
@@ -215,17 +228,27 @@ def drive_distance(
             hold_str = "line"
             corr = (k_cte * cte) + (-k_omega * omega)
 
+        ramp = 1.0 if soft_start_s <= 0 else min(1.0, (now - t0) / soft_start_s)
         base = direction * wheel_speed_rad_s
-        cmd_l = base - corr
-        cmd_r = base + corr
-        set_wheel_velocity(cmd_l, cmd_r)
+        cmd_l_target = (base - corr) * ramp
+        cmd_r_target = (base + corr) * ramp
+
+        if max_wheel_accel <= 0:
+            cmd_l_sent = cmd_l_target
+            cmd_r_sent = cmd_r_target
+        else:
+            max_delta = max_wheel_accel * max(0.0, dt)
+            cmd_l_sent = _slew_toward(cmd_l_sent, cmd_l_target, max_delta)
+            cmd_r_sent = _slew_toward(cmd_r_sent, cmd_r_target, max_delta)
+
+        set_wheel_velocity(cmd_l_sent, cmd_r_sent)
 
         if now >= next_print:
             print(
                 f"[DRIVE] {pose_str()} traveled={traveled:.2f}/{dist_in:.2f}  hold={hold_str}  "
                 f"err_th={math.degrees(err_th):+.2f}° cte={cte:+.2f} in  "
                 f"omega={math.degrees(omega):+.1f}°/s corr={corr:+.2f}  "
-                f"cmdL={cmd_l:.2f} cmdR={cmd_r:.2f}"
+                f"ramp={ramp:.2f} cmdL={cmd_l_sent:.2f} cmdR={cmd_r_sent:.2f}"
             )
             next_print += print_period
 
@@ -257,7 +280,9 @@ def turn_angle(
     ki: float = 0,
     kd: float = 0,    # (speed per rad/s of remaining angle change)
     i_limit: float = 2.0,     # clamp integral
-    stop_tol_deg: float = 0 # stop tolerance in degrees
+    stop_tol_deg: float = 0,  # stop tolerance in degrees
+    soft_start_s: float = 0.25,
+    max_wheel_accel: float = 4.0,
 ):
     """
     Turn in place by deg degrees (+CCW, -CW) using encoder odometry.
@@ -287,6 +312,8 @@ def turn_angle(
     integ = 0.0
     prev_e = None
     stop_tol = math.radians(abs(stop_tol_deg))
+    cmd_l_sent = 0.0
+    cmd_r_sent = 0.0
 
     while True:
         now = time.monotonic()
@@ -326,14 +353,29 @@ def turn_angle(
         if speed < min_turn_speed:
             speed = min_turn_speed
 
-        # DO NOT CHANGE THIS SIGN STRUCTURE
-        set_wheel_velocity(-sign * speed, +sign * speed)
+        ramp = 1.0 if soft_start_s <= 0 else min(1.0, (now - t0) / soft_start_s)
+        speed_cmd = speed * ramp
+
+        # Keep existing turn sign convention; only soften command onset.
+        cmd_l_target = -sign * speed_cmd
+        cmd_r_target = +sign * speed_cmd
+
+        if max_wheel_accel <= 0:
+            cmd_l_sent = cmd_l_target
+            cmd_r_sent = cmd_r_target
+        else:
+            max_delta = max_wheel_accel * max(0.0, dt)
+            cmd_l_sent = _slew_toward(cmd_l_sent, cmd_l_target, max_delta)
+            cmd_r_sent = _slew_toward(cmd_r_sent, cmd_r_target, max_delta)
+
+        set_wheel_velocity(cmd_l_sent, cmd_r_sent)
 
         if now >= next_print:
             wl, wr = read_wheel_vel()
             print(
                 f"[TURN ] {pose_str()} turned={math.degrees(turned):.1f}/{deg:.1f}  "
-                f"rem={math.degrees(remaining):.2f}°  wl={wl:+.2f} wr={wr:+.2f}  speed={speed:.2f}"
+                f"rem={math.degrees(remaining):.2f}°  wl={wl:+.2f} wr={wr:+.2f}  "
+                f"ramp={ramp:.2f} speed={speed_cmd:.2f}"
             )
             next_print += print_period
 
@@ -360,6 +402,10 @@ def execute_commands(
     k_theta: float = 8.0,
     k_omega: float = 0.5,
     k_cte: float = 0.8,
+    drive_soft_start_s: float = 0.25,
+    turn_soft_start_s: float = 0.25,
+    drive_max_wheel_accel: float = 8.0,
+    turn_max_wheel_accel: float = 4.0,
 ):
     """
     Execute list of ("TURN", deg) and ("DRIVE", inches).
@@ -368,7 +414,12 @@ def execute_commands(
     for typ, val in cmds:
         if typ == "TURN":
             print(f"\n=== TURN {val:+.0f}° ===")
-            turn_angle(val, max_turn_speed=turn_max_speed)
+            turn_angle(
+                val,
+                max_turn_speed=turn_max_speed,
+                soft_start_s=turn_soft_start_s,
+                max_wheel_accel=turn_max_wheel_accel,
+            )
         elif typ == "DRIVE":
             print(f"\n=== DRIVE {val:.2f} in ===  (heading_hold={heading_hold}, line_hold={line_hold}, k_theta={k_theta}, k_omega={k_omega}, k_cte={k_cte})")
             drive_distance(
@@ -379,6 +430,8 @@ def execute_commands(
                 k_theta=k_theta,
                 k_omega=k_omega,
                 k_cte=k_cte,
+                soft_start_s=drive_soft_start_s,
+                max_wheel_accel=drive_max_wheel_accel,
             )
         else:
             raise ValueError(f"Unknown command type: {typ}")
@@ -398,7 +451,7 @@ def quick_straight_test(dist_in=60.0):
 
 if __name__ == "__main__":
     reset_pose(0.0, 0.0, 0.0)
-    demo = [("TURN", 90)]
+    demo = [('TURN', 180.0), ('DRIVE', 3.5), ('TURN', 90.0), ('DRIVE', 9.9), ('TURN', -90.0), ('DRIVE', 22.0), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 32.0), ('TURN', 90.0), ('DRIVE', 7.0)]
     execute_commands(
         demo,
         drive_speed=6.0,
