@@ -7,7 +7,7 @@
 # - Maintains and prints odometry pose (x,y,theta) while moving
 # - Uses measured dt (monotonic clock) so encoder integration is weighted correctly
 # - TRUE heading-hold during DRIVE based on theta error (NOT wr-wl)
-# - Turn uses a slowdown ramp + optional brake pulse to reduce overshoot
+# - Turn uses PID on remaining angle + optional brake pulse (NEW)
 #
 # If you still see drift, it is likely wheel slip / wheel radius mismatch (odometry can't "fix" that),
 # but this heading-hold will actively correct the robot's yaw based on odometry theta.
@@ -133,64 +133,42 @@ def update_pose(dt: float):
     - Reads wheel angular velocities from the motor controllers (encoders).
     - Converts them to linear (v) and angular (omega) body velocities.
     - Integrates forward for dt seconds.
-
-    Note: this is *pure odometry* (no external sensors). If the wheels slip,
-    the pose estimate will drift even if the controller is doing the right thing.
     """
     global POSE_X, POSE_Y, POSE_TH
 
     wl, wr = read_wheel_vel()
     v = WHEEL_RADIUS_IN * (wl + wr) / 2.0                # in/s
-    omega = WHEEL_RADIUS_IN * (wl - wr) / WHEEL_BASE_IN  # rad/s
+    omega = WHEEL_RADIUS_IN * (wr - wl) / WHEEL_BASE_IN  # rad/s
 
+    POSE_TH = _wrap_pi(POSE_TH + omega * dt)
     POSE_X += v * math.cos(POSE_TH) * dt
     POSE_Y += v * math.sin(POSE_TH) * dt
-    POSE_TH = _wrap_pi(POSE_TH + omega * dt)
 
 
 def drive_distance(
     dist_in: float,
     wheel_speed_rad_s: float = 6.0,
-    timeout_s: float = 25.0,
-    print_hz: float = 10.0,
     heading_hold: bool = True,
     line_hold: bool = True,
-    k_theta: float = 8.0,         # P gain on heading error (rad -> wheel rad/s)
-    k_omega: float = 0.5,         # D-ish damping on yaw rate (rad/s -> wheel rad/s)
-    k_cte: float = 0.8,           # P gain on cross-track error (in -> wheel rad/s)
-    max_wheel_cmd: float = 10.0,  # clamp wheel command
+    k_theta: float = 8.0,
+    k_omega: float = 0.5,
+    k_cte: float = 0.8,
+    timeout_s: float = 25.0,
+    print_hz: float = 20.0,
 ):
     """
-    Drive straight for dist_in inches using encoder-integrated odometry.
-
-    What this loop tries to hold during a DRIVE segment:
-      1) Heading hold (theta): keep POSE_TH near its value at the start of the segment.
-      2) Line hold (cross-track): keep the robot on the line it started on.
-
-    Line hold is what you're asking for:
-      - If the robot is driving along +X/-X (east/west), it will keep Y ≈ start_y.
-      - If the robot is driving along +Y/-Y (north/south), it will keep X ≈ start_x.
-    More generally, it keeps you on the infinite line that starts at (start_x,start_y)
-    and points along target_th.
-
-    Tuning tips:
-      - Still drifts sideways off the line? Increase k_cte a bit (0.8 -> 1.0 -> 1.2)
-      - Snakes/oscillates? Decrease k_theta and/or k_cte, or increase k_omega slightly.
+    Drive forward dist_in inches, with optional heading hold + line hold using odometry theta.
     """
-    if dist_in <= 0:
+    if dist_in == 0:
         return
 
-    # --- Segment reference (the "ideal" line) ---
-    start_x, start_y = POSE_X, POSE_Y
-    target_th = POSE_TH  # heading we want to maintain during this segment
+    start_x = POSE_X
+    start_y = POSE_Y
+    start_th = POSE_TH
 
-    # Unit direction of the desired line (along-track) and its left normal (cross-track).
-    #   u  = [cos(th), sin(th)]
-    #   nL = [-sin(th), cos(th)]  (points to the left of u)
-    ux = math.cos(target_th)
-    uy = math.sin(target_th)
-    nxL = uy
-    nyL = -ux
+    # unit vector along the desired line (initial heading)
+    ux = math.cos(start_th)
+    uy = math.sin(start_th)
 
     t0 = time.monotonic()
     last_t = t0
@@ -198,77 +176,51 @@ def drive_distance(
     next_print = t0
     print_period = 1.0 / max(1e-6, print_hz)
 
-    # --- Initial command ---
-    set_wheel_velocity(wheel_speed_rad_s, wheel_speed_rad_s)
-
-    # --- Debug values for printing ---
-    err_th = 0.0
-    omega = 0.0
-    cte = 0.0
-    corr = 0.0
-    cmd_l = wheel_speed_rad_s
-    cmd_r = wheel_speed_rad_s
+    dist_in = float(dist_in)
+    direction = 1.0 if dist_in >= 0 else -1.0
+    dist_in = abs(dist_in)
 
     while True:
         now = time.monotonic()
         dt = now - last_t
         last_t = now
 
-        # 1) Integrate pose from encoders (dead-reckoning)
         update_pose(dt)
 
-        # 2) Track progress along the segment
         dx = POSE_X - start_x
         dy = POSE_Y - start_y
         traveled = math.hypot(dx, dy)
 
-        # 3) Optional closed-loop correction (heading + line)
-        if heading_hold or line_hold:
-            # Heading error relative to start of the segment
-            err_th = _wrap_pi(POSE_TH - target_th )
+        # Heading error to initial heading
+        err_th = _wrap_pi(start_th - POSE_TH)
 
-            # Yaw rate estimate from wheel encoders (rad/s)
-            wl, wr = read_wheel_vel()
-            omega = WHEEL_RADIUS_IN * (wl - wr) / WHEEL_BASE_IN
+        # Yaw rate estimate from wheel speeds (odometry-based)
+        wl, wr = read_wheel_vel()
+        omega = WHEEL_RADIUS_IN * (wr - wl) / WHEEL_BASE_IN  # rad/s
 
-            # Cross-track error (inches):
-            #   positive => robot is LEFT of the desired line
-            #   negative => robot is RIGHT of the desired line
-            #
-            # cte = (p - p0) dot nL
-            cte = dx * nxL + dy * nyL
+        # Cross-track error to the initial line through start, along (ux,uy)
+        # signed perp distance: (p-start) x u
+        cte = (dx * uy - dy * ux) if line_hold else 0.0
 
-            # Differential steering correction:
-            #   positive corr => CCW (left) turn (right wheel faster)
-            # For cross-track:
-            #   if cte > 0 (left of line), we want a RIGHT turn => corr should go negative.
-            corr = 0.0
-            if heading_hold:
-                corr += (k_theta * err_th - k_omega * omega)
-            if line_hold:
-                corr += (-k_cte * cte)
+        # Compose correction
+        corr = 0.0
+        hold_str = "none"
+        if heading_hold and line_hold:
+            hold_str = "theta+line"
+            corr = k_theta * err_th + (-k_omega * omega) + (k_cte * cte)
+        elif heading_hold:
+            hold_str = "theta"
+            corr = k_theta * err_th + (-k_omega * omega)
+        elif line_hold:
+            hold_str = "line"
+            corr = (k_cte * cte) + (-k_omega * omega)
 
-            cmd_l = wheel_speed_rad_s - corr
-            cmd_r = wheel_speed_rad_s + corr
+        base = direction * wheel_speed_rad_s
+        cmd_l = base - corr
+        cmd_r = base + corr
+        set_wheel_velocity(cmd_l, cmd_r)
 
-            # Clamp so we never command negative wheel speeds in this simple forward-only driver
-            cmd_l = max(0.0, min(max_wheel_cmd, cmd_l))
-            cmd_r = max(0.0, min(max_wheel_cmd, cmd_r))
-
-            set_wheel_velocity(cmd_l, cmd_r)
-        else:
-            # Open-loop: just drive both wheels the same speed
-            set_wheel_velocity(wheel_speed_rad_s, wheel_speed_rad_s)
-
-        # 4) Print status
         if now >= next_print:
-            flags = []
-            if heading_hold:
-                flags.append("theta")
-            if line_hold:
-                flags.append("line")
-            hold_str = "+".join(flags) if flags else "none"
-
             print(
                 f"[DRIVE] {pose_str()} traveled={traveled:.2f}/{dist_in:.2f}  hold={hold_str}  "
                 f"err_th={math.degrees(err_th):+.2f}° cte={cte:+.2f} in  "
@@ -277,7 +229,6 @@ def drive_distance(
             )
             next_print += print_period
 
-        # 5) Stop conditions
         if traveled >= dist_in:
             break
 
@@ -285,7 +236,6 @@ def drive_distance(
             stop()
             raise RuntimeError("Drive timed out (not moving as expected).")
 
-        # Small sleep to avoid pegging CPU; still fast enough for control
         time.sleep(0.002)
 
     stop()
@@ -294,18 +244,28 @@ def drive_distance(
 
 def turn_angle(
     deg: float,
-    max_turn_speed: float = 5.0,
+    max_turn_speed: float = 6.0,
     min_turn_speed: float = 1.5,
-    slow_down_deg: float = 30.0,
+    slow_down_deg: float = 20.0,   # kept for compatibility; PID already naturally slows
     timeout_s: float = 12.0,
     print_hz: float = 10.0,
-    use_brake_pulse: bool = True,
+    use_brake_pulse: bool = False,
     brake_speed: float = 2.0,
     brake_time: float = 0.01,
+    # --- PID gains ---
+    kp: float = 3,     # (speed per rad of remaining angle)
+    ki: float = 0,
+    kd: float = 0,    # (speed per rad/s of remaining angle change)
+    i_limit: float = 2.0,     # clamp integral
+    stop_tol_deg: float = 0 # stop tolerance in degrees
 ):
     """
     Turn in place by deg degrees (+CCW, -CW) using encoder odometry.
-    Slows down near target to reduce overshoot + optional brake pulse.
+    PID is on remaining angle magnitude, output is wheel speed (rad/s).
+
+    IMPORTANT: DOES NOT change channels or motor sign conventions.
+    The actual motor command line remains:
+        set_wheel_velocity(-sign * speed, +sign * speed)
     """
     if deg == 0:
         return
@@ -321,7 +281,12 @@ def turn_angle(
     next_print = t0
     print_period = 1.0 / max(1e-6, print_hz)
 
+    # KEEP your exact convention
     sign = 1.0 if deg < 0 else -1.0
+
+    integ = 0.0
+    prev_e = None
+    stop_tol = math.radians(abs(stop_tol_deg))
 
     while True:
         now = time.monotonic()
@@ -331,31 +296,46 @@ def turn_angle(
         update_pose(dt)
 
         # Signed turned angle relative to start (wrapped into [-pi,pi]).
-        # Works well for turns up to ~180° in one command.
         turned = _wrap_pi(POSE_TH - start_th)
 
-        remaining = abs(target) - abs(turned)
-        remaining_deg = math.degrees(max(0.0, remaining))
+        # Match your original "abs(target)-abs(turned)" style (works for <=180°)
+        remaining = max(0.0, abs(target) - abs(turned))
 
-        if remaining_deg < slow_down_deg:
-            frac = remaining_deg / slow_down_deg
-            speed = min_turn_speed + frac * (max_turn_speed - min_turn_speed)
+        if remaining <= stop_tol:
+            break
+
+        # PID error is remaining angle (radians), always positive
+        e = remaining
+
+        if prev_e is None:
+            de = 0.0
         else:
-            speed = max_turn_speed
+            de = (e - prev_e) / max(1e-6, dt)
+        prev_e = e
 
-        # CCW (+): left backward, right forward
+        integ += e * dt
+        if integ > i_limit:
+            integ = i_limit
+
+        # PID output -> speed command (wheel rad/s)
+        speed = kp * e + ki * integ + kd * de
+
+        # clamp & stiction floor
+        if speed > max_turn_speed:
+            speed = max_turn_speed
+        if speed < min_turn_speed:
+            speed = min_turn_speed
+
+        # DO NOT CHANGE THIS SIGN STRUCTURE
         set_wheel_velocity(-sign * speed, +sign * speed)
 
         if now >= next_print:
             wl, wr = read_wheel_vel()
             print(
                 f"[TURN ] {pose_str()} turned={math.degrees(turned):.1f}/{deg:.1f}  "
-                f"wl={wl:+.2f} wr={wr:+.2f} speed={speed:.2f}"
+                f"rem={math.degrees(remaining):.2f}°  wl={wl:+.2f} wr={wr:+.2f}  speed={speed:.2f}"
             )
             next_print += print_period
-
-        if abs(turned) >= abs(target):
-            break
 
         if now - t0 > timeout_s:
             stop()
@@ -417,17 +397,12 @@ def quick_straight_test(dist_in=60.0):
 
 
 if __name__ == "__main__":
-    # Example test: straight drive with heading hold
     reset_pose(0.0, 0.0, 0.0)
-    demo = [('TURN', 180.0), ('DRIVE', 4.0), ('TURN', 90.0), ('DRIVE', 9.0), ('TURN', -90.0), ('DRIVE', 22.0), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 32.0), ('TURN', 90.0), ('DRIVE', 7.0)]    
+    demo = [("TURN", 90)]
     execute_commands(
         demo,
         drive_speed=6.0,
         heading_hold=True,
-        k_theta=12.0,  # start here; try 12 if it still drifts
+        k_theta=12.0,
         k_omega=0.6,
     )
-
-    # Example full command list:
-    # cmds = [("DRIVE", 24.0), ("TURN", 90.0), ("DRIVE", 12.0)]
-    # execute_commands(cmds)

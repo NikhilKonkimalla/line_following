@@ -354,7 +354,7 @@ if __name__ == "__main__":
 
     cmds, path = plan_path(
         is_easy=True,
-        resolution=1,
+        resolution=10,
         start_in=(7.5, 49.0),
         goal_in=(65.0, 40.0),
         start_heading="W",
