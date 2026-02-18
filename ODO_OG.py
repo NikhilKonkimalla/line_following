@@ -59,7 +59,7 @@ RIGHT_WHEEL_SCALE = 1.00
 # Robot params (inches)
 # ------------------------------
 WHEEL_RADIUS_IN = 1.15
-WHEEL_BASE_IN = 5.42
+WHEEL_BASE_IN = 5.38
 
 # If wheel speed = motor speed * (24/40)
 GEAR_WHEEL_PER_MOTOR = 24 / 40
@@ -451,8 +451,7 @@ def quick_straight_test(dist_in=60.0):
 
 if __name__ == "__main__":
     reset_pose(0.0, 0.0, 0.0)
-    demo = [('TURN', -90.0), ('DRIVE', 57.0), ('TURN', -90.0), ('DRIVE', 35.0), ('TURN', 90.0), ('DRIVE', 3.0)]
-    #[('TURN', -90.0), ('DRIVE', 2.5), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 22.0), ('TURN', 90.0), ('DRIVE', 4.0), ('TURN', -90.0), ('DRIVE', 33.0), ('TURN', -90.0), ('DRIVE', 9.0), ('TURN', 90.0), ('DRIVE', 1.0)]
+    demo = [('TURN', -90.0), ('DRIVE', 6.0), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 20.0), ('TURN', 90.0), ('DRIVE', 6.0), ('TURN', -90.0), ('DRIVE', 33.0), ('TURN', -90.0), ('DRIVE', 10.0)]
     execute_commands(
         demo,
         drive_speed=6.0,
