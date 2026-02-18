@@ -123,10 +123,10 @@ def kalman_update(theta_meas_deg, gyro_rate_deg_s, dt):
 
 
 # PD/PID controller
-theta_set = -1.21 # adjust for any base theta error
+theta_set = -1.13 # adjust for any base theta error
 
-Kp = 0.43
-Kd = 0.00014
+Kp = 0.45
+Kd = 0.000005
 Ki = 0
 
 integral = 0
@@ -136,7 +136,7 @@ prev_error = 0.0
 max_u = 6.0  # voltage limit
 
 # Main loop timing
-dt_target = 0.0075 # < 100 Hz
+dt_target = 0.007 # < 100 Hz
 t_prev = time.monotonic()
 
 try:
