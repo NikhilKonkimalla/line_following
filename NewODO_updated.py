@@ -256,7 +256,7 @@ def turn_angle(
     kp: float = 3,     # (speed per rad of remaining angle)
     ki: float = 0,
     kd: float = 0,    # (speed per rad/s of remaining angle change)
-    i_limit: float = 0,     # clamp integral
+    i_limit: float = 2.0,     # clamp integral
     stop_tol_deg: float = 0 # stop tolerance in degrees
 ):
     """
