@@ -451,7 +451,7 @@ def quick_straight_test(dist_in=60.0):
 
 if __name__ == "__main__":
     reset_pose(0.0, 0.0, 0.0)
-    demo = [('TURN', 180.0), ('DRIVE', 3.5), ('TURN', 90.0), ('DRIVE', 9.9), ('TURN', -90.0), ('DRIVE', 22.0), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 32.0), ('TURN', 90.0), ('DRIVE', 7.0)]
+    demo = [('TURN', -90.0), ('DRIVE', 6.5), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 20.0), ('TURN', 90.0), ('DRIVE', 4.0), ('TURN', -90.0), ('DRIVE', 32.0), ('TURN', -90.0), ('DRIVE', 9.0)]
     execute_commands(
         demo,
         drive_speed=6.0,

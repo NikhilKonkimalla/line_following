@@ -355,9 +355,9 @@ if __name__ == "__main__":
     cmds, path = plan_path(
         is_easy=True,
         resolution=10,
-        start_in=(7.5, 49.0),
-        goal_in=(65.0, 40.0),
-        start_heading="W",
+        start_in= (6.5, 27.0),
+        goal_in= (65, 40),
+        start_heading="S",
         clearance_in=5,
         show_plot=True,
         show_cost=False,
