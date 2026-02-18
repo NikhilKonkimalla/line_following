@@ -58,7 +58,7 @@ RIGHT_WHEEL_SCALE = 1.00
 # ------------------------------
 # Robot params (inches)
 # ------------------------------
-WHEEL_RADIUS_IN = 1.15
+WHEEL_RADIUS_IN = 1.13
 WHEEL_BASE_IN = 5.38
 
 # If wheel speed = motor speed * (24/40)
@@ -280,7 +280,7 @@ def turn_angle(
     ki: float = 0,
     kd: float = 0,    # (speed per rad/s of remaining angle change)
     i_limit: float = 2.0,     # clamp integral
-    stop_tol_deg: float = 0,  # stop tolerance in degrees
+    stop_tol_deg: float = 0.01,  # stop tolerance in degrees
     soft_start_s: float = 0.25,
     max_wheel_accel: float = 4.0,
 ):
@@ -451,7 +451,7 @@ def quick_straight_test(dist_in=60.0):
 
 if __name__ == "__main__":
     reset_pose(0.0, 0.0, 0.0)
-    demo = [('TURN', -90.0), ('DRIVE', 6.0), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 20.0), ('TURN', 90.0), ('DRIVE', 6.0), ('TURN', -90.0), ('DRIVE', 33.0), ('TURN', -90.0), ('DRIVE', 10.0)]
+    demo = [("TURN", 90)] 
     execute_commands(
         demo,
         drive_speed=6.0,
