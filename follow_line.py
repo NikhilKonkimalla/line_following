@@ -13,8 +13,8 @@ plink = Plink()
 plink.power_supply_voltage = 9.6  # Set to our battery voltage
 
 # Set up motor channels - 1 motor per side
-left_motor = plink.channel2
-right_motor = plink.channel1
+left_motor = plink.channel1
+right_motor = plink.channel3
 
 # Set motor voltage limits (default is 0)
 left_motor.motor_voltage_limit = 6.0
@@ -108,7 +108,7 @@ try:
         # Send power to motors
         # Left motor reversed, right motor not reversed
         left_motor.power_command = -left_power
-        right_motor.power_command = right_power
+        right_motor.power_command = -right_power
         
         # Debug output
         print(f"Lux: {luxSample:6.1f} | Error: {error:6.1f} | "
