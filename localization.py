@@ -54,11 +54,13 @@ pytime.sleep(3)
 blackCal = [sensor_lux.lux for _ in range(20)] 
 meanBlack = sum(blackCal) / len(blackCal)
 
+
 #Caluculate Threshold
 edgeThreshold = (meanBlack + meanWhite) / 2
 # Calculate deadzone as a percentage of the total range
 sensor_range = abs(meanWhite - meanBlack)
-deadzone = sensor_range * 0.15  # 8% of range for deadzone
+deadzone = sensor_range * 0.12  # 8% of range for deadzone
+
 print(f"Average White reading: {meanWhite}")
 print(f"Average Black reading: {meanBlack}")
 print(f"Resulting edge threshold: {edgeThreshold}")
@@ -92,6 +94,14 @@ pose_y = 0.0
 pose_th = 0.0
 loop_count = 0
 last_loop_t = pytime.monotonic()
+distance_average_period_s = 1.0  # Adjust this window length as needed
+distance_samples = []
+block_distance_threshold = 15.0
+
+# Probabilistic localization parameters (discrete Bayes filter).
+# Replace sector_map_bits with the map provided for each trial.
+sector_map_bits = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+sector_length_in = 5.75
 
 
 def clamp(value, low, high):
@@ -102,15 +112,113 @@ def wrap_pi(angle):
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 
+def average_distance_over_period(samples, now, distance, period_s):
+    samples.append((now, distance))
+    cutoff = now - period_s
+    while samples and samples[0][0] < cutoff:
+        samples.pop(0)
+    return sum(d for _, d in samples) / len(samples)
+
+
+def normalize_probs(probs):
+    total = sum(probs)
+    if total <= 0:
+        return [1.0 / len(probs)] * len(probs)
+    return [p / total for p in probs]
+
+
+def init_belief_given_block(map_bits):
+    weighted = [0.9 if bits == 1 else 0.1 for bits in map_bits]
+    return normalize_probs(weighted)
+
+
+def update_start_sector_beliefs(prior, map_bits, sectors_moved_since_start, block_seen,
+                                p_detect=0.90, p_false=0.10):
+    """
+    Bayes update:
+      posterior(i) ∝ P(z | start=i) * prior(i)
+
+    p_detect: P(sensor says "block" | block truly present)
+    p_false:  P(sensor says "block" | block truly absent)
+    """
+    p_miss = 1.0 - p_detect   # P(no block | block present)
+    p_clear = 1.0 - p_false   # P(no block | no block present)
+    n = len(map_bits)
+    updated = [0.0] * len(prior)
+    for start_idx, prior_prob in enumerate(prior):
+        expected_block = (map_bits[(start_idx + sectors_moved_since_start) % n] == 1)
+        if expected_block:
+            likelihood = p_detect if block_seen else p_miss
+        else:
+            likelihood = p_false if block_seen else p_clear
+        updated[start_idx] = prior_prob * likelihood
+    return normalize_probs(updated)
+
+
 print("Starting line following...")
 
 atEnd = False
 time = 0.0
+start_alignment_state = "detect_initial"
+start_block_value = 0
+beliefs = [1.0 / len(sector_map_bits)] * len(sector_map_bits)
+belief_initialized = False
+sector_distance_accum = 0.0
+total_distance_traveled = 0.0
+sectors_moved_since_start = 0
+
+sensor_distance.start_ranging()
 
 try:
     while not atEnd:
         now = pytime.monotonic()
         dt = now - last_loop_t
+        if sensor_distance.data_ready:
+            raw_distance = sensor_distance.distance
+        else:
+            raw_distance = 100.0
+        sensor_distance.clear_interrupt()
+        # Raw (unaveraged) block reading for alignment — avoids averaging lag
+        # masking fast transitions between block/no-block sectors.
+        alignment_block = raw_distance < block_distance_threshold
+
+        # Averaged block reading for Bayes updates — smooths sensor noise.
+        distance = average_distance_over_period(
+            distance_samples, now, raw_distance, distance_average_period_s
+        )
+        block = distance < block_distance_threshold
+
+        # Startup sector alignment:
+        # start on 0 -> wait for 1
+        # start on 1 -> wait for 0, then wait for 1
+        if start_alignment_state == "detect_initial":
+            if not alignment_block:
+                start_alignment_state = "seek_block"
+                print("Start detected on 0 (no block). Seeking first block...")
+            else:
+                start_alignment_state = "seek_no_block"
+                print("Start detected on 1 (block). Seeking gap then block...")
+        elif start_alignment_state == "seek_no_block":
+            if not alignment_block:
+                start_alignment_state = "seek_block"
+                print("Gap found. Now seeking first block edge...")
+        elif start_alignment_state == "seek_block":
+            if alignment_block:
+                pose_x = 0.0
+                pose_y = 0.0
+                pose_th = 0.0
+                loop_count = 0
+                start_alignment_state = "done"
+                print("Starting sector found. Odometry reset to x=0, y=0, th=0.")
+                beliefs = init_belief_given_block(sector_map_bits)
+                belief_initialized = True
+                sectors_moved_since_start = 0
+                best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
+                print(
+                    f"Belief initialized from block sector. "
+                    f"Best={best_idx} p={beliefs[best_idx]:.3f}"
+                )
+
         last_loop_t = now
         dt = clamp(dt, 1e-3, 0.1)
 
@@ -167,20 +275,38 @@ try:
         pose_th = wrap_pi(pose_th + omega * dt)
         pose_x += v * math.cos(pose_th) * dt
         pose_y += v * math.sin(pose_th) * dt
+        total_distance_traveled += abs(v) * dt
         loop_count += 1
-        
-        # Debug output with actual velocities from encoders
-        if loop_count % 20 == 0:
-            print(
-                f"Lux: {luxSample:6.1f} | Err: {error:6.1f} | "
-                f"L_cmd: {left_velocity:5.2f} R_cmd: {right_velocity:5.2f} | "
-                f"x={pose_x:6.2f} in y={pose_y:6.2f} in th={math.degrees(pose_th):6.1f} deg"
-            )
-        if time>10 and 0<=pose_x<2.5 and 0<=pose_y<2.5:
+
+        if belief_initialized:
+            sector_distance_accum += abs(v) * dt
+            while sector_distance_accum >= sector_length_in:
+                sector_distance_accum -= sector_length_in
+                sectors_moved_since_start += 1
+                crossing_block = alignment_block
+                beliefs = update_start_sector_beliefs(
+                    beliefs, sector_map_bits, sectors_moved_since_start, crossing_block
+                )
+                best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
+                print(
+                    f"x={pose_x:.2f} y={pose_y:.2f} th={math.degrees(pose_th):.1f} deg | "
+                    f"dist={total_distance_traveled:.2f} in | "
+                    f"probabilities={[round(p, 3) for p in beliefs]} | "
+                    f"most_likely_start_sector={best_idx}"
+                )
+        convergence_threshold = 0.95
+        min_sectors_before_stop = len(sector_map_bits)
+        if (belief_initialized
+                and sectors_moved_since_start >= min_sectors_before_stop
+                and max(beliefs) >= convergence_threshold):
+            best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
             atEnd = True
             left_motor.velocity_command = 0.0
             right_motor.velocity_command = 0.0
-            print("Reached end of course")
+            print(
+                f"Localization converged! Start sector={best_idx} "
+                f"p={beliefs[best_idx]:.3f}. Stopping."
+            )
             break
         time += 0.01
         pytime.sleep(0.01)  # 20Hz control loop
