@@ -40,26 +40,26 @@ right_motor.velocity_command = 0.0
 
 #Calibration on white
 print("BEGIN CALIBRATION WHITE")
-pytime.sleep(3)
+#pytime.sleep(3)
 #This might need to be a for loop if sensor 
 # readings don't change between iterations
 whiteCal = [sensor_lux.lux for _ in range (20)]
-meanWhite = sum(whiteCal) / len(whiteCal)
-
+#meanWhite = sum(whiteCal) / len(whiteCal)
+meanWhite = 40
 #Calibration on black
 print("BEGIN CALIBRATION BLACK")
-pytime.sleep(3)
+#pytime.sleep(3)
 #This might need to be a for loop if sensor 
 # readings don't change between iterations
 blackCal = [sensor_lux.lux for _ in range(20)] 
-meanBlack = sum(blackCal) / len(blackCal)
-
+#meanBlack = sum(blackCal) / len(blackCal)
+meanBlack = 10
 
 #Caluculate Threshold
 edgeThreshold = (meanBlack + meanWhite) / 2
 # Calculate deadzone as a percentage of the total range
 sensor_range = abs(meanWhite - meanBlack)
-deadzone = sensor_range * 0.12  # 8% of range for deadzone
+deadzone = sensor_range * 0.15  # 8% of range for deadzone
 
 print(f"Average White reading: {meanWhite}")
 print(f"Average Black reading: {meanBlack}")
@@ -94,13 +94,13 @@ pose_y = 0.0
 pose_th = 0.0
 loop_count = 0
 last_loop_t = pytime.monotonic()
-distance_average_period_s = 1.0  # Adjust this window length as needed
+distance_average_period_s = 0.1  # Shortened from 1.0s - faster response to blocks
 distance_samples = []
-block_distance_threshold = 15.0
+block_distance_threshold = 30.0
 
 # Probabilistic localization parameters (discrete Bayes filter).
 # Replace sector_map_bits with the map provided for each trial.
-sector_map_bits = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+sector_map_bits = [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]
 sector_length_in = 5.75
 
 
@@ -133,7 +133,7 @@ def init_belief_given_block(map_bits):
 
 
 def update_start_sector_beliefs(prior, map_bits, sectors_moved_since_start, block_seen,
-                                p_detect=0.90, p_false=0.10):
+                                p_detect=0.90, p_false=0.05):
     """
     Bayes update:
       posterior(i) ∝ P(z | start=i) * prior(i)
@@ -173,20 +173,18 @@ try:
     while not atEnd:
         now = pytime.monotonic()
         dt = now - last_loop_t
-        if sensor_distance.data_ready:
-            raw_distance = sensor_distance.distance
-        else:
-            raw_distance = 100.0
+        raw_distance = sensor_distance.distance
+        if raw_distance < 8: raw_distance = 100 
         sensor_distance.clear_interrupt()
-        # Raw (unaveraged) block reading for alignment — avoids averaging lag
-        # masking fast transitions between block/no-block sectors.
+        # Use raw distance for both alignment and block detection
+        # The 1-second averaging window is too long for fast-moving blocks
         alignment_block = raw_distance < block_distance_threshold
-
-        # Averaged block reading for Bayes updates — smooths sensor noise.
+        block = raw_distance < block_distance_threshold
+        
+        # Keep averaged distance for monitoring/debugging
         distance = average_distance_over_period(
             distance_samples, now, raw_distance, distance_average_period_s
         )
-        block = distance < block_distance_threshold
 
         # Startup sector alignment:
         # start on 0 -> wait for 1
@@ -278,6 +276,9 @@ try:
         total_distance_traveled += abs(v) * dt
         loop_count += 1
 
+        # Print distance readings in the loop
+        print(f"raw_distance={raw_distance:.2f} cm, averaged_distance={distance:.2f} cm, block={block}")
+        
         if belief_initialized:
             sector_distance_accum += abs(v) * dt
             while sector_distance_accum >= sector_length_in:
@@ -288,12 +289,11 @@ try:
                     beliefs, sector_map_bits, sectors_moved_since_start, crossing_block
                 )
                 best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
-                print(
-                    f"x={pose_x:.2f} y={pose_y:.2f} th={math.degrees(pose_th):.1f} deg | "
-                    f"dist={total_distance_traveled:.2f} in | "
-                    f"probabilities={[round(p, 3) for p in beliefs]} | "
-                    f"most_likely_start_sector={best_idx}"
-                )
+        # print(
+        #     f"rawd={raw_distance :.2f} | "
+        #     f"dist={total_distance_traveled:.2f} in | "
+        #     f"probabilities={[round(p, 3) for p in beliefs]} | "
+        # )
         convergence_threshold = 0.95
         min_sectors_before_stop = len(sector_map_bits)
         if (belief_initialized
