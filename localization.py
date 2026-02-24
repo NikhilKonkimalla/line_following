@@ -66,7 +66,7 @@ print(f"Average Black reading: {meanBlack}")
 print(f"Resulting edge threshold: {edgeThreshold}")
 print(f"Deadzone range: +/- {deadzone:.1f} lux")
 print("Beginning course traversal in 5 seconds:")
-pytime.sleep(5)
+#pytime.sleep(5)
 
 #TUNING INSTRUCTIONS
 #--------------------------------------------------------------#
@@ -79,7 +79,7 @@ pytime.sleep(5)
 
 # Velocity Control parameters
 gain = 0.3              # Proportional gain (increased for sharper turns)
-base_velocity = 6
+base_velocity = 7
 max_velocity = base_velocity     # Base forward velocity in rad/s
 correction_limit = 2.0  # Max velocity correction in rad/s
 min_velocity = 0.5      # Minimum velocity in rad/s
@@ -100,8 +100,21 @@ block_distance_threshold = 30.0
 
 # Probabilistic localization parameters (discrete Bayes filter).
 # Replace sector_map_bits with the map provided for each trial.
-sector_map_bits = [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]
-sector_length_in = 5.75
+sector_map_bits = [0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]
+sector_length_in = 5.8 #keep eye on this
+
+# Goal sector: set this to the desired destination sector (0-15)
+# Set to None to only localize without navigation
+goal_sector = 11  # Change this to your desired goal sector (e.g., 0, 5, 12)
+
+# Sensor reliability parameters for Bayesian filter
+# Tune these based on your sensor's actual performance
+p_detect = 0.9  # P(sensor detects block | block present) - decrease if sensor misses blocks often
+p_false = 0.15  # P(sensor detects block | no block) - increase if sensor has many false positives
+# Common tuning scenarios:
+#   Frequent false positives: p_detect=0.90, p_false=0.15
+#   Unreliable sensor: p_detect=0.80, p_false=0.10
+#   Conservative/slow convergence: p_detect=0.70, p_false=0.15
 
 
 def clamp(value, low, high):
@@ -133,7 +146,7 @@ def init_belief_given_block(map_bits):
 
 
 def update_start_sector_beliefs(prior, map_bits, sectors_moved_since_start, block_seen,
-                                p_detect=0.90, p_false=0.05):
+                                p_detect, p_false):
     """
     Bayes update:
       posterior(i) ∝ P(z | start=i) * prior(i)
@@ -159,13 +172,14 @@ print("Starting line following...")
 
 atEnd = False
 time = 0.0
-start_alignment_state = "detect_initial"
-start_block_value = 0
+# Initialize with uniform belief - don't know where we are yet
 beliefs = [1.0 / len(sector_map_bits)] * len(sector_map_bits)
-belief_initialized = False
+belief_initialized = True  # Start localization immediately
 sector_distance_accum = 0.0
 total_distance_traveled = 0.0
 sectors_moved_since_start = 0
+
+print("Starting probabilistic localization immediately with uniform belief...")
 
 sensor_distance.start_ranging()
 
@@ -174,7 +188,7 @@ try:
         now = pytime.monotonic()
         dt = now - last_loop_t
         raw_distance = sensor_distance.distance
-        if raw_distance < 8: raw_distance = 100 
+        if raw_distance < 3: raw_distance = 100 
         sensor_distance.clear_interrupt()
         # Use raw distance for both alignment and block detection
         # The 1-second averaging window is too long for fast-moving blocks
@@ -185,37 +199,6 @@ try:
         distance = average_distance_over_period(
             distance_samples, now, raw_distance, distance_average_period_s
         )
-
-        # Startup sector alignment:
-        # start on 0 -> wait for 1
-        # start on 1 -> wait for 0, then wait for 1
-        if start_alignment_state == "detect_initial":
-            if not alignment_block:
-                start_alignment_state = "seek_block"
-                print("Start detected on 0 (no block). Seeking first block...")
-            else:
-                start_alignment_state = "seek_no_block"
-                print("Start detected on 1 (block). Seeking gap then block...")
-        elif start_alignment_state == "seek_no_block":
-            if not alignment_block:
-                start_alignment_state = "seek_block"
-                print("Gap found. Now seeking first block edge...")
-        elif start_alignment_state == "seek_block":
-            if alignment_block:
-                pose_x = 0.0
-                pose_y = 0.0
-                pose_th = 0.0
-                loop_count = 0
-                start_alignment_state = "done"
-                print("Starting sector found. Odometry reset to x=0, y=0, th=0.")
-                beliefs = init_belief_given_block(sector_map_bits)
-                belief_initialized = True
-                sectors_moved_since_start = 0
-                best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
-                print(
-                    f"Belief initialized from block sector. "
-                    f"Best={best_idx} p={beliefs[best_idx]:.3f}"
-                )
 
         last_loop_t = now
         dt = clamp(dt, 1e-3, 0.1)
@@ -277,7 +260,7 @@ try:
         loop_count += 1
 
         # Print distance readings in the loop
-        print(f"raw_distance={raw_distance:.2f} cm, averaged_distance={distance:.2f} cm, block={block}")
+        print(f"raw_distance={raw_distance:.2f} cm, block={block}, td={total_distance_traveled}")
         
         if belief_initialized:
             sector_distance_accum += abs(v) * dt
@@ -286,28 +269,58 @@ try:
                 sectors_moved_since_start += 1
                 crossing_block = alignment_block
                 beliefs = update_start_sector_beliefs(
-                    beliefs, sector_map_bits, sectors_moved_since_start, crossing_block
+                    beliefs, sector_map_bits, sectors_moved_since_start, crossing_block,
+                    p_detect, p_false
                 )
                 best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
-        # print(
-        #     f"rawd={raw_distance :.2f} | "
-        #     f"dist={total_distance_traveled:.2f} in | "
-        #     f"probabilities={[round(p, 3) for p in beliefs]} | "
-        # )
-        convergence_threshold = 0.95
+                print(
+                    f"probabilities={[round(p, 3) for p in beliefs]} | "
+                )
+        convergence_threshold = 0.65
         min_sectors_before_stop = len(sector_map_bits)
         if (belief_initialized
                 and sectors_moved_since_start >= min_sectors_before_stop
                 and max(beliefs) >= convergence_threshold):
             best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
-            atEnd = True
-            left_motor.velocity_command = 0.0
-            right_motor.velocity_command = 0.0
-            print(
-                f"Localization converged! Start sector={best_idx} "
-                f"p={beliefs[best_idx]:.3f}. Stopping."
-            )
-            break
+            
+            # Check if we have a goal sector to navigate to
+            if goal_sector is not None:
+                # Calculate current sector based on starting sector and movement
+                current_sector = (best_idx + sectors_moved_since_start) % len(sector_map_bits)
+                
+                # Calculate shortest distance to goal (considering circular track)
+                forward_distance = (goal_sector - current_sector) % len(sector_map_bits)
+                
+                # If we're not at the goal, continue moving
+                if current_sector != goal_sector:
+                    # Only print once when localization first converges
+                    if sectors_moved_since_start == min_sectors_before_stop:
+                        print(
+                            f"Localization converged! Start sector={best_idx}, "
+                            f"Current sector={current_sector}, Goal sector={goal_sector}. "
+                            f"Distance to goal: {forward_distance} sectors. Continuing..."
+                        )
+                else:
+                    # We've reached the goal!
+                    atEnd = True
+                    left_motor.velocity_command = 0.0
+                    right_motor.velocity_command = 0.0
+                    print(
+                        f"Goal reached! Start sector={best_idx}, "
+                        f"Current sector={current_sector}, Goal sector={goal_sector}. "
+                        f"Total distance traveled: {total_distance_traveled:.2f} in. Stopping."
+                    )
+                    break
+            else:
+                # No goal sector - stop after localization converges
+                atEnd = True
+                left_motor.velocity_command = 0.0
+                right_motor.velocity_command = 0.0
+                print(
+                    f"Localization converged! Start sector={best_idx} "
+                    f"p={beliefs[best_idx]:.3f}. Stopping."
+                )
+                break
         time += 0.01
         pytime.sleep(0.01)  # 20Hz control loop
 
