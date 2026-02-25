@@ -1,3 +1,12 @@
+"""Line-following robot with distance-based Bayesian localization over track sectors.
+
+This script:
+- Drives a differential-drive robot to follow a dark line using a light sensor.
+- Uses a time-of-flight distance sensor to detect blocks at known sector locations.
+- Maintains and updates a belief over the possible starting sector using a discrete
+  Bayes filter, then optionally drives to a specified goal sector once localized.
+"""
+
 import time as pytime
 import board
 import math
@@ -53,13 +62,13 @@ print("BEGIN CALIBRATION BLACK")
 # readings don't change between iterations
 blackCal = [sensor_lux.lux for _ in range(20)] 
 #meanBlack = sum(blackCal) / len(blackCal)
-meanBlack = 10
+meanBlack = 8
 
 #Caluculate Threshold
 edgeThreshold = (meanBlack + meanWhite) / 2
 # Calculate deadzone as a percentage of the total range
 sensor_range = abs(meanWhite - meanBlack)
-deadzone = sensor_range * 0.15  # 8% of range for deadzone
+deadzone = sensor_range * 0.1  # 8% of range for deadzone
 
 print(f"Average White reading: {meanWhite}")
 print(f"Average Black reading: {meanBlack}")
@@ -96,16 +105,16 @@ loop_count = 0
 last_loop_t = pytime.monotonic()
 distance_average_period_s = 0.1  # Shortened from 1.0s - faster response to blocks
 distance_samples = []
-block_distance_threshold = 30.0
+block_distance_threshold = 38.0
 
 # Probabilistic localization parameters (discrete Bayes filter).
 # Replace sector_map_bits with the map provided for each trial.
-sector_map_bits = [0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]
-sector_length_in = 5.8 #keep eye on this
+sector_map_bits = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+sector_length_in = 5.75 #keep eye on this
 
 # Goal sector: set this to the desired destination sector (0-15)
 # Set to None to only localize without navigation
-goal_sector = 11  # Change this to your desired goal sector (e.g., 0, 5, 12)
+goal_sector = 15  # Change this to your desired goal sector (e.g., 0, 5, 12)
 
 # Sensor reliability parameters for Bayesian filter
 # Tune these based on your sensor's actual performance
@@ -118,14 +127,17 @@ p_false = 0.15  # P(sensor detects block | no block) - increase if sensor has ma
 
 
 def clamp(value, low, high):
+    """Clamp numeric `value` to the inclusive range [`low`, `high`]."""
     return max(low, min(high, value))
 
 
 def wrap_pi(angle):
+    """Wrap an angle in radians to the range [-pi, pi)."""
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 
 def average_distance_over_period(samples, now, distance, period_s):
+    """Maintain a sliding-window average of `distance` over the last `period_s` seconds."""
     samples.append((now, distance))
     cutoff = now - period_s
     while samples and samples[0][0] < cutoff:
@@ -134,6 +146,7 @@ def average_distance_over_period(samples, now, distance, period_s):
 
 
 def normalize_probs(probs):
+    """Normalize a list of probabilities; fall back to uniform if the sum is zero."""
     total = sum(probs)
     if total <= 0:
         return [1.0 / len(probs)] * len(probs)
@@ -141,6 +154,7 @@ def normalize_probs(probs):
 
 
 def init_belief_given_block(map_bits):
+    """Return a prior favoring sectors that contain a block in `map_bits`."""
     weighted = [0.9 if bits == 1 else 0.1 for bits in map_bits]
     return normalize_probs(weighted)
 
@@ -181,17 +195,21 @@ sectors_moved_since_start = 0
 
 print("Starting probabilistic localization immediately with uniform belief...")
 
+# Start continuous ranging on the time-of-flight distance sensor
 sensor_distance.start_ranging()
 
 try:
+    # Main control loop: read sensors, compute motor commands, update odometry and beliefs
     while not atEnd:
         now = pytime.monotonic()
         dt = now - last_loop_t
+        # Raw distance in centimeters from the front time-of-flight sensor
         raw_distance = sensor_distance.distance
+        # Ignore obviously invalid "too close" readings by treating them as no obstacle
         if raw_distance < 3: raw_distance = 100 
         sensor_distance.clear_interrupt()
-        # Use raw distance for both alignment and block detection
-        # The 1-second averaging window is too long for fast-moving blocks
+        # Use instantaneous distance for both alignment and block detection.
+        # An averaging window would lag too much for quickly appearing/disappearing blocks.
         alignment_block = raw_distance < block_distance_threshold
         block = raw_distance < block_distance_threshold
         
@@ -203,17 +221,18 @@ try:
         last_loop_t = now
         dt = clamp(dt, 1e-3, 0.1)
 
+        # Light sensor measurement for line following (higher on white, lower on black)
         luxSample = sensor_lux.lux
         error = luxSample - edgeThreshold
 
-        # Apply deadzone - if error is small, go straight (no correction)
+        # Apply deadzone - if error is small, go straight (no steering correction)
         if abs(error) < deadzone:
             # In deadzone: both motors at same velocity for straight line
             left_velocity = base_velocity
             right_velocity = base_velocity
         else:
-            # Outside deadzone: apply steering correction
-            # Reduce error by deadzone amount to smooth transition
+            # Outside deadzone: apply steering correction.
+            # Reduce error by deadzone amount to smooth transition at the deadzone edges.
             if error > 0:
                 error = error - deadzone
             else:
@@ -259,18 +278,19 @@ try:
         total_distance_traveled += abs(v) * dt
         loop_count += 1
 
-        # Print distance readings in the loop
-        # Calculate best sector belief continuously
+        # Calculate best sector belief continuously for monitoring
         best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
         best_prob = beliefs[best_idx]
         print(f"raw_distance={raw_distance:.2f} cm, block={block} | Best start sector={best_idx}, p={best_prob:.3f}")
         
+        # Bayesian localization over assumed starting sectors, updated at each sector crossing
         if belief_initialized:
             sector_distance_accum += abs(v) * dt
             while sector_distance_accum >= sector_length_in:
                 sector_distance_accum -= sector_length_in
                 sectors_moved_since_start += 1
                 crossing_block = alignment_block
+                # Update belief over starting sector using whether we see a block here or not
                 beliefs = update_start_sector_beliefs(
                     beliefs, sector_map_bits, sectors_moved_since_start, crossing_block,
                     p_detect, p_false
@@ -281,7 +301,9 @@ try:
                     f"Block detected: {crossing_block} | "
                     f"Best start sector={best_idx} p={beliefs[best_idx]:.3f}"
                 )
-        convergence_threshold = 0.65
+        # Only declare convergence once we've gone around at least once and
+        # one hypothesis has high enough probability.
+        convergence_threshold = 0.75
         min_sectors_before_stop = len(sector_map_bits)
         if (belief_initialized
                 and sectors_moved_since_start >= min_sectors_before_stop
@@ -290,10 +312,11 @@ try:
             
             # Check if we have a goal sector to navigate to
             if goal_sector is not None:
-                # Calculate current sector based on starting sector and movement
+                # Calculate current sector based on starting sector and how many
+                # sectors we've advanced since the start.
                 current_sector = (best_idx + sectors_moved_since_start) % len(sector_map_bits)
                 
-                # Calculate shortest distance to goal (considering circular track)
+                # Distance in sectors to reach the goal going forward on the circular track
                 forward_distance = (goal_sector - current_sector) % len(sector_map_bits)
                 
                 # If we're not at the goal, continue moving
