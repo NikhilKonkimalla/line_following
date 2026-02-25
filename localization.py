@@ -260,7 +260,10 @@ try:
         loop_count += 1
 
         # Print distance readings in the loop
-        print(f"raw_distance={raw_distance:.2f} cm, block={block}, td={total_distance_traveled}")
+        # Calculate best sector belief continuously
+        best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
+        best_prob = beliefs[best_idx]
+        print(f"raw_distance={raw_distance:.2f} cm, block={block} | Best start sector={best_idx}, p={best_prob:.3f}")
         
         if belief_initialized:
             sector_distance_accum += abs(v) * dt
@@ -274,7 +277,9 @@ try:
                 )
                 best_idx = max(range(len(beliefs)), key=lambda i: beliefs[i])
                 print(
-                    f"probabilities={[round(p, 3) for p in beliefs]} | "
+                    f">>> SECTOR CROSSING #{sectors_moved_since_start} | "
+                    f"Block detected: {crossing_block} | "
+                    f"Best start sector={best_idx} p={beliefs[best_idx]:.3f}"
                 )
         convergence_threshold = 0.65
         min_sectors_before_stop = len(sector_map_bits)
