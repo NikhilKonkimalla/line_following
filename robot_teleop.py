@@ -18,17 +18,13 @@ SERVO_PIN_B = 12        # right servo — GPIO 12, physical Pin 32
 
 SERVO_FREQ = 50         # Hz — standard for hobby servos
 SERVO_MIN_DC = 2.5      # duty cycle for 0°
-SERVO_MAX_DC = 12.5     # duty cycle for 180°
-SERVO_STEP = 2          # degrees per command (client sends ~33/sec while held)
+SERVO_MAX_DC = 12.5   # duty cycle for 180° (2.5ms / 20ms * 100)
+SERVO_STEP = 1          # degrees per command (client sends ~33/sec while held)
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(SERVO_PIN_A, GPIO.OUT)
 GPIO.setup(SERVO_PIN_B, GPIO.OUT)
 
-servo_a = GPIO.PWM(SERVO_PIN_A, SERVO_FREQ)
-servo_b = GPIO.PWM(SERVO_PIN_B, SERVO_FREQ)
-servo_a.start(7.5)  # center both at 90°
-servo_b.start(7.5)
 current_angle = 90.0    # single shared angle — servos move as one arm
 
 def angle_to_dc(angle: float) -> float:
@@ -44,6 +40,9 @@ def set_arm(angle: float):
     mirrored_angle = 180.0 - current_angle
     servo_a.ChangeDutyCycle(angle_to_dc(current_angle))
     servo_b.ChangeDutyCycle(angle_to_dc(mirrored_angle))
+    time.sleep(0.02)
+    servo_a.ChangeDutyCycle(0)
+    servo_b.ChangeDutyCycle(0)
 
 def arm_left():
     set_arm(current_angle - SERVO_STEP)
@@ -54,6 +53,13 @@ def arm_right():
 def arm_center():
     set_arm(90.0)
 
+servo_a = GPIO.PWM(SERVO_PIN_A, SERVO_FREQ)
+servo_b = GPIO.PWM(SERVO_PIN_B, SERVO_FREQ)
+servo_a.start(angle_to_dc(90))
+servo_b.start(angle_to_dc(90))
+time.sleep(0.5)
+servo_a.ChangeDutyCycle(0)
+servo_b.ChangeDutyCycle(0)
 print(f"Arm servos initialized on GPIO {SERVO_PIN_A} + GPIO {SERVO_PIN_B}, centered at 90°")
 
 # ----------------------
