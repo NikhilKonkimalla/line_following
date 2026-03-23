@@ -109,12 +109,12 @@ block_distance_threshold = 38.0
 
 # Probabilistic localization parameters (discrete Bayes filter).
 # Replace sector_map_bits with the map provided for each trial.
-sector_map_bits = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+sector_map_bits = [1, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]
 sector_length_in = 5.75 #keep eye on this
 
 # Goal sector: set this to the desired destination sector (0-15)
 # Set to None to only localize without navigation
-goal_sector = 15  # Change this to your desired goal sector (e.g., 0, 5, 12)
+goal_sector = 11  # Change this to your desired goal sector (e.g., 0, 5, 12)
 
 # Sensor reliability parameters for Bayesian filter
 # Tune these based on your sensor's actual performance
