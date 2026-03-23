@@ -38,12 +38,16 @@ def angle_to_dc(angle: float) -> float:
 
 def set_arm(angle: float):
     """Move both servos together. Because they are mirrored, servo B gets
-    the inverse angle so both push/pull the arm in the same direction."""
+    the inverse angle so both push/pull the arm in the same direction.
+    PWM is cut after a short pulse so the idle signal doesn't bleed into motors."""
     global current_angle
     current_angle = max(0.0, min(180.0, angle))
     mirrored_angle = 180.0 - current_angle
     servo_a.ChangeDutyCycle(angle_to_dc(current_angle))
     servo_b.ChangeDutyCycle(angle_to_dc(mirrored_angle))
+    time.sleep(0.3)         # give servo time to reach position
+    servo_a.ChangeDutyCycle(0)  # cut signal — servo holds mechanically
+    servo_b.ChangeDutyCycle(0)
 
 def arm_left():
     set_arm(current_angle - SERVO_STEP)
