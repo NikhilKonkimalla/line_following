@@ -22,7 +22,7 @@ WIDTH = 640
 HEIGHT = 480
 
 STREAM_TYPE = "ps3"  # "ps3" or "logitech"
-ENABLE_VIDEO = False  # set True once camera is set up
+ENABLE_VIDEO = True  # set True once camera is set up
 
 # Speed levels (power values 1-5)
 SPEED_LEVELS = {
