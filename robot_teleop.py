@@ -18,12 +18,6 @@ from motorgo import Plink, ControlMode
 MOTOR_A_PINS = [5, 6, 13, 19]   # IN1-IN4 for left  — GPIO, physical pins 29,31,33,35
 MOTOR_B_PINS = [10, 9, 11, 25]  # IN1-IN4 for right — GPIO, physical pins 19,21,23,22
 
-<<<<<<< HEAD
-SERVO_FREQ = 50         # Hz — standard for hobby servos
-SERVO_MIN_DC = 2.5      # duty cycle for 0°
-SERVO_MAX_DC = 12.5   # duty cycle for 180° (2.5ms / 20ms * 100)
-SERVO_STEP = 1          # degrees per command (client sends ~33/sec while held)
-=======
 # Half-step sequence (8 steps) — smoother and more torque than full-step
 HALF_STEP_SEQ = [
     [1, 0, 0, 0],
@@ -38,19 +32,14 @@ HALF_STEP_SEQ = [
 
 STEP_DELAY    = 0.002   # seconds between steps — tune for speed vs torque
 STEPS_PER_CMD = 16      # half-steps per ARM_LEFT/ARM_RIGHT command received
->>>>>>> 81f1c6d20a254fff01409dc0e02a5b1dcf10783e
 
 GPIO.setmode(GPIO.BCM)
 for pin in MOTOR_A_PINS + MOTOR_B_PINS:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, 0)
 
-<<<<<<< HEAD
-current_angle = 90.0    # single shared angle — servos move as one arm
-=======
 step_index_a = 0
 step_index_b = 0
->>>>>>> 81f1c6d20a254fff01409dc0e02a5b1dcf10783e
 
 def step_motor(pins: list, index: int, direction: int) -> int:
     """Fire one half-step. direction: +1 or -1. Returns new index."""
@@ -59,24 +48,10 @@ def step_motor(pins: list, index: int, direction: int) -> int:
         GPIO.output(pin, val)
     return index
 
-<<<<<<< HEAD
-def set_arm(angle: float):
-    """Move both servos together. Because they are mirrored, servo B gets
-    the inverse angle so both push/pull the arm in the same direction."""
-    global current_angle
-    current_angle = max(0.0, min(180.0, angle))
-    mirrored_angle = 180.0 - current_angle
-    servo_a.ChangeDutyCycle(angle_to_dc(current_angle))
-    servo_b.ChangeDutyCycle(angle_to_dc(mirrored_angle))
-    time.sleep(0.02)
-    servo_a.ChangeDutyCycle(0)
-    servo_b.ChangeDutyCycle(0)
-=======
 def release_motor(pins: list):
     """De-energise all coils — reduces heat and eliminates electrical noise."""
     for pin in pins:
         GPIO.output(pin, 0)
->>>>>>> 81f1c6d20a254fff01409dc0e02a5b1dcf10783e
 
 def move_arm(steps: int, dir_a: int):
     """Move both steppers together. Motor B runs opposite because it is mirrored."""
@@ -104,20 +79,9 @@ def arm_move_async(steps: int, direction: int):
         )
         _arm_thread.start()
 
-<<<<<<< HEAD
-servo_a = GPIO.PWM(SERVO_PIN_A, SERVO_FREQ)
-servo_b = GPIO.PWM(SERVO_PIN_B, SERVO_FREQ)
-servo_a.start(angle_to_dc(90))
-servo_b.start(angle_to_dc(90))
-time.sleep(0.5)
-servo_a.ChangeDutyCycle(0)
-servo_b.ChangeDutyCycle(0)
-print(f"Arm servos initialized on GPIO {SERVO_PIN_A} + GPIO {SERVO_PIN_B}, centered at 90°")
-=======
 print("Stepper arm initialized.")
 print(f"  Motor A pins (left) : {MOTOR_A_PINS}")
 print(f"  Motor B pins (right): {MOTOR_B_PINS}")
->>>>>>> 81f1c6d20a254fff01409dc0e02a5b1dcf10783e
 
 # ----------------------
 # DRIVE MOTOR SETUP (Plink)
