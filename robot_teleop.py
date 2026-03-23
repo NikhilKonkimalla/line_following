@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Teleop server - runs on the robot (Raspberry Pi).
 Receives UDP drive commands from the client and controls motors via motorgo/Plink.
-Also controls an SG90 servo on GPIO 18 (Pin 12).
+Also controls two mirrored SG90 servos on GPIO 18 (Pin 12) and GPIO 12 (Pin 32).
 """
 import socket
 import json
@@ -10,41 +10,51 @@ import RPi.GPIO as GPIO
 from motorgo import Plink, ControlMode
 
 # ----------------------
-# SERVO SETUP (SG90 on GPIO 18 / Pin 12)
+# SERVO SETUP (two mirrored SG90s)
 # ----------------------
-SERVO_PIN = 18          # hardware PWM pin
+# Update these pins once you know which GPIO you're wiring to:
+SERVO_PIN_A = 18        # left servo  — GPIO 18, physical Pin 12
+SERVO_PIN_B = 12        # right servo — GPIO 12, physical Pin 32
+
 SERVO_FREQ = 50         # Hz — standard for hobby servos
 SERVO_MIN_DC = 2.5      # duty cycle for 0°
 SERVO_MAX_DC = 12.5     # duty cycle for 180°
-SERVO_CENTER_DC = 7.5   # duty cycle for 90° (center)
-SERVO_STEP = 5          # degrees per keypress
+SERVO_STEP = 2          # degrees per command (client sends ~33/sec while held)
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(SERVO_PIN, GPIO.OUT)
-servo_pwm = GPIO.PWM(SERVO_PIN, SERVO_FREQ)
-servo_pwm.start(SERVO_CENTER_DC)
-current_angle = 90.0    # track current angle
+GPIO.setup(SERVO_PIN_A, GPIO.OUT)
+GPIO.setup(SERVO_PIN_B, GPIO.OUT)
+
+servo_a = GPIO.PWM(SERVO_PIN_A, SERVO_FREQ)
+servo_b = GPIO.PWM(SERVO_PIN_B, SERVO_FREQ)
+servo_a.start(7.5)  # center both at 90°
+servo_b.start(7.5)
+current_angle = 90.0    # single shared angle — servos move as one arm
 
 def angle_to_dc(angle: float) -> float:
     """Convert angle (0-180) to duty cycle."""
     angle = max(0.0, min(180.0, angle))
     return SERVO_MIN_DC + (angle / 180.0) * (SERVO_MAX_DC - SERVO_MIN_DC)
 
-def set_servo(angle: float):
+def set_arm(angle: float):
+    """Move both servos together. Because they are mirrored, servo B gets
+    the inverse angle so both push/pull the arm in the same direction."""
     global current_angle
     current_angle = max(0.0, min(180.0, angle))
-    servo_pwm.ChangeDutyCycle(angle_to_dc(current_angle))
+    mirrored_angle = 180.0 - current_angle
+    servo_a.ChangeDutyCycle(angle_to_dc(current_angle))
+    servo_b.ChangeDutyCycle(angle_to_dc(mirrored_angle))
 
-def servo_left():
-    set_servo(current_angle - SERVO_STEP)
+def arm_left():
+    set_arm(current_angle - SERVO_STEP)
 
-def servo_right():
-    set_servo(current_angle + SERVO_STEP)
+def arm_right():
+    set_arm(current_angle + SERVO_STEP)
 
-def servo_center():
-    set_servo(90.0)
+def arm_center():
+    set_arm(90.0)
 
-print(f"Servo initialized on GPIO {SERVO_PIN}, centered at 90°")
+print(f"Arm servos initialized on GPIO {SERVO_PIN_A} + GPIO {SERVO_PIN_B}, centered at 90°")
 
 # ----------------------
 # MOTOR SETUP (no encoders needed)
@@ -147,13 +157,13 @@ try:
             elif cmd == "STOP":
                 stop()
 
-            # --- Servo commands ---
+            # --- Arm servo commands ---
             elif cmd == "SERVO_LEFT":
-                servo_left()
+                arm_left()
             elif cmd == "SERVO_RIGHT":
-                servo_right()
+                arm_right()
             elif cmd == "SERVO_CENTER":
-                servo_center()
+                arm_center()
 
             else:
                 stop()
@@ -166,6 +176,7 @@ try:
 
 finally:
     stop()
-    servo_pwm.stop()
+    servo_a.stop()
+    servo_b.stop()
     GPIO.cleanup()
     print("\nTeleop stopped.")

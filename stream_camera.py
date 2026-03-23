@@ -50,6 +50,7 @@ cmd = [
     "-vcodec", "libx264",
     "-preset", "ultrafast",
     "-tune", "zerolatency",
+    "-vf", "vflip,hflip",
     "-g", "30",
     "-pix_fmt", "yuv420p",
 

@@ -78,6 +78,9 @@ print()
 print("=== USAR TELEOP CONTROLS ===")
 print("  W/A/S/D  = Forward / Left / Back / Right")
 print("  Q/E      = Pivot left / Pivot right")
+print("  [        = Servo left  (counter-clockwise)")
+print("  ]        = Servo right (clockwise)")
+print("  \\        = Servo center")
 print("  1-5      = Speed level")
 print("  SPACE    = Emergency stop")
 print("  ESC      = Quit")
@@ -97,7 +100,14 @@ DRIVE_KEYS = {
     ord('e'): "RIGHT",
 }
 
+SERVO_KEYS = {
+    ord('['): "SERVO_LEFT",
+    ord(']'): "SERVO_RIGHT",
+    ord('\\'): "SERVO_CENTER",
+}
+
 active_cmd = "STOP"
+active_servo_cmd = None  # tracks held servo key
 
 try:
     while True:
@@ -110,7 +120,6 @@ try:
                 continue
             frame = np.frombuffer(raw_frame, np.uint8).reshape((HEIGHT, WIDTH, 3)).copy()
         else:
-            # Teleop-only: black frame with HUD
             frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
         # Draw HUD overlay
@@ -121,6 +130,8 @@ try:
         cv2.putText(frame, cmd_text, (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+        cv2.namedWindow("USAR Teleop", cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty("USAR Teleop", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow("USAR Teleop", frame)
 
         key = cv2.waitKey(30) & 0xFF  # 30ms ~33fps for teleop-only mode
@@ -132,15 +143,30 @@ try:
         if key in SPEED_LEVELS:
             current_power = SPEED_LEVELS[key]
             print(f"Speed set to {current_power:.0f}")
+            active_servo_cmd = None
+
+        elif key in SERVO_KEYS:
+            active_servo_cmd = SERVO_KEYS[key]  # hold to keep sweeping
 
         elif key in DRIVE_KEYS:
             active_cmd = DRIVE_KEYS[key]
+            active_servo_cmd = None  # release servo when driving
 
         elif key == ord(' '):
             active_cmd = "STOP"
+            active_servo_cmd = None
             print("STOP")
 
+        else:
+            # No servo key held this frame — stop sweeping
+            active_servo_cmd = None
+
+        # Send drive command every frame
         send_cmd(active_cmd)
+
+        # Send servo command every frame if held
+        if active_servo_cmd:
+            send_cmd(active_servo_cmd)
 
 except KeyboardInterrupt:
     pass
