@@ -1,0 +1,6 @@
+[submodule "Adafruit_CircuitPython_BH1750"]
+	path = Adafruit_CircuitPython_BH1750
+	url = https://github.com/Every-Flavor-Robotics/Adafruit_CircuitPython_BH1750.git
+[submodule "Adafruit_CircuitPython_VL53L4CX"]
+	path = Adafruit_CircuitPython_VL53L4CX
+	url = https://github.com/Every-Flavor-Robotics/Adafruit_CircuitPython_VL53L4CX.git

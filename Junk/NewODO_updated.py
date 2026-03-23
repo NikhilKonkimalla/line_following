@@ -1,3 +1,17 @@
+# NewODO.py
+# Executes commands from path_planning.py:
+#   ("TURN", degrees)   + = CCW, - = CW
+#   ("DRIVE", inches)
+#
+# This version:
+# - Maintains and prints odometry pose (x,y,theta) while moving
+# - Uses measured dt (monotonic clock) so encoder integration is weighted correctly
+# - TRUE heading-hold during DRIVE based on theta error (NOT wr-wl)
+# - Turn uses PID on remaining angle + optional brake pulse (NEW)
+#
+# If you still see drift, it is likely wheel slip / wheel radius mismatch (odometry can't "fix" that),
+# but this heading-hold will actively correct the robot's yaw based on odometry theta.
+
 import time
 import math
 import board
@@ -45,7 +59,7 @@ RIGHT_WHEEL_SCALE = 1.00
 # Robot params (inches)
 # ------------------------------
 WHEEL_RADIUS_IN = 1.15
-WHEEL_BASE_IN = 5.38
+WHEEL_BASE_IN = 5.42
 
 # If wheel speed = motor speed * (24/40)
 GEAR_WHEEL_PER_MOTOR = 24 / 40
@@ -266,7 +280,7 @@ def turn_angle(
     ki: float = 0,
     kd: float = 0,    # (speed per rad/s of remaining angle change)
     i_limit: float = 2.0,     # clamp integral
-    stop_tol_deg: float = 0.01,  # stop tolerance in degrees
+    stop_tol_deg: float = 0,  # stop tolerance in degrees
     soft_start_s: float = 0.25,
     max_wheel_accel: float = 4.0,
 ):
@@ -437,10 +451,11 @@ def quick_straight_test(dist_in=60.0):
 
 if __name__ == "__main__":
     reset_pose(0.0, 0.0, 0.0)
-    demo =[('DRIVE', 24)]
+    demo = [('TURN', -90.0), ('DRIVE', 57.0), ('TURN', -90.0), ('DRIVE', 35.0), ('TURN', 90.0), ('DRIVE', 3.0)]
+    #[('TURN', -90.0), ('DRIVE', 2.5), ('TURN', -90.0), ('DRIVE', 8.0), ('TURN', 90.0), ('DRIVE', 22.0), ('TURN', 90.0), ('DRIVE', 4.0), ('TURN', -90.0), ('DRIVE', 33.0), ('TURN', -90.0), ('DRIVE', 9.0), ('TURN', 90.0), ('DRIVE', 1.0)]
     execute_commands(
         demo,
-        drive_speed=10.0,
+        drive_speed=6.0,
         heading_hold=True,
         k_theta=12.0,
         k_omega=0.6,
