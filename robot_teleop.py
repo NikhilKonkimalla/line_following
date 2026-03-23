@@ -1,11 +1,50 @@
 #!/usr/bin/env python3
 """Teleop server - runs on the robot (Raspberry Pi).
 Receives UDP drive commands from the client and controls motors via motorgo/Plink.
+Also controls an SG90 servo on GPIO 18 (Pin 12).
 """
 import socket
 import json
 import time
+import RPi.GPIO as GPIO
 from motorgo import Plink, ControlMode
+
+# ----------------------
+# SERVO SETUP (SG90 on GPIO 18 / Pin 12)
+# ----------------------
+SERVO_PIN = 18          # hardware PWM pin
+SERVO_FREQ = 50         # Hz — standard for hobby servos
+SERVO_MIN_DC = 2.5      # duty cycle for 0°
+SERVO_MAX_DC = 12.5     # duty cycle for 180°
+SERVO_CENTER_DC = 7.5   # duty cycle for 90° (center)
+SERVO_STEP = 5          # degrees per keypress
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(SERVO_PIN, GPIO.OUT)
+servo_pwm = GPIO.PWM(SERVO_PIN, SERVO_FREQ)
+servo_pwm.start(SERVO_CENTER_DC)
+current_angle = 90.0    # track current angle
+
+def angle_to_dc(angle: float) -> float:
+    """Convert angle (0-180) to duty cycle."""
+    angle = max(0.0, min(180.0, angle))
+    return SERVO_MIN_DC + (angle / 180.0) * (SERVO_MAX_DC - SERVO_MIN_DC)
+
+def set_servo(angle: float):
+    global current_angle
+    current_angle = max(0.0, min(180.0, angle))
+    servo_pwm.ChangeDutyCycle(angle_to_dc(current_angle))
+
+def servo_left():
+    set_servo(current_angle - SERVO_STEP)
+
+def servo_right():
+    set_servo(current_angle + SERVO_STEP)
+
+def servo_center():
+    set_servo(90.0)
+
+print(f"Servo initialized on GPIO {SERVO_PIN}, centered at 90°")
 
 # ----------------------
 # MOTOR SETUP (no encoders needed)
@@ -52,7 +91,7 @@ sock.bind(("", TELEOP_PORT))
 sock.settimeout(0.5)  # timeout so we can stop motors if no commands received
 
 print(f"Teleop server listening on UDP port {TELEOP_PORT}")
-print("Controls: WASD=drive, Q/E=pivot, 1-5=speed, SPACE=stop")
+print("Controls: WASD=drive, Q/E=pivot, [/]=servo, \\=servo center, 1-5=speed, SPACE=stop")
 
 # ----------------------
 # DRIVE LOGIC
@@ -88,6 +127,7 @@ try:
             current_power = power
             last_cmd_time = time.monotonic()
 
+            # --- Drive commands ---
             if cmd == "FWD":
                 set_motors(power, power)
             elif cmd == "BACK":
@@ -106,17 +146,26 @@ try:
                 set_motors(-power, -power * 0.1)
             elif cmd == "STOP":
                 stop()
+
+            # --- Servo commands ---
+            elif cmd == "SERVO_LEFT":
+                servo_left()
+            elif cmd == "SERVO_RIGHT":
+                servo_right()
+            elif cmd == "SERVO_CENTER":
+                servo_center()
+
             else:
                 stop()
 
         except (json.JSONDecodeError, UnicodeDecodeError):
-            # Malformed packet - ignore it
-            pass 
+            pass
         except socket.timeout:
-            # Safety: stop if no commands for 0.5s
             if time.monotonic() - last_cmd_time >= 0.5:
                 stop()
 
 finally:
     stop()
+    servo_pwm.stop()
+    GPIO.cleanup()
     print("\nTeleop stopped.")
