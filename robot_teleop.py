@@ -15,29 +15,23 @@ from motorgo import Plink, ControlMode
 plink = Plink()
 plink.power_supply_voltage = 9.6
 
-right_motor1 = plink.channel1
-right_motor2 = plink.channel2
-left_motor1  = plink.channel3
-left_motor2  = plink.channel4
+left_motor  = plink.channel1
+right_motor = plink.channel3
 
-right_motor1.motor_voltage_limit = 6.0
-right_motor2.motor_voltage_limit = 6.0
-left_motor1.motor_voltage_limit  = 6.0
-left_motor2.motor_voltage_limit  = 6.0
+left_motor.motor_voltage_limit  = 6.0
+right_motor.motor_voltage_limit = 6.0
 
 plink.connect()
 
-right_motor1.control_mode = ControlMode.POWER
-right_motor2.control_mode = ControlMode.POWER
-left_motor1.control_mode  = ControlMode.POWER
-left_motor2.control_mode  = ControlMode.POWER
+left_motor.control_mode  = ControlMode.POWER
+right_motor.control_mode = ControlMode.POWER
 
 print("Testing drive motors...")
-for m in [right_motor1, right_motor2, left_motor1, left_motor2]:
-    m.power_command = 1.0
+left_motor.power_command  = 1.0
+right_motor.power_command = 1.0
 time.sleep(0.3)
-for m in [right_motor1, right_motor2, left_motor1, left_motor2]:
-    m.power_command = 0.0
+left_motor.power_command  = 0.0
+right_motor.power_command = 0.0
 print("Drive motor test done.")
 
 # ----------------------
@@ -61,12 +55,8 @@ def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 def set_motors(left: float, right: float):
-    left  = clamp(left,  -MAX_POWER, MAX_POWER)
-    right = clamp(right, -MAX_POWER, MAX_POWER)
-    left_motor1.power_command  = left
-    left_motor2.power_command  = left
-    right_motor1.power_command = -right
-    right_motor2.power_command = -right
+    left_motor.power_command  =  clamp(left,  -MAX_POWER, MAX_POWER)
+    right_motor.power_command = -clamp(right, -MAX_POWER, MAX_POWER)
 
 def stop():
     set_motors(0.0, 0.0)
@@ -136,8 +126,8 @@ try:
                 stop_cv()
             elif cmd == "STOP":
                 stop()
-            else:
-                stop()
+            elif cmd in ("SERVO_LEFT", "SERVO_RIGHT", "SERVO_CENTER"):
+                pass  # no servo hardware; ignore without stopping drive motors
 
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
