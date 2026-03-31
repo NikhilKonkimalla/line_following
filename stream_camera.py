@@ -48,9 +48,10 @@ cmd = [
     "-i", DEVICE,
 
     "-vcodec", "h264_v4l2m2m",
-    "-g", str(FPS),
+    "-g", "1",
     "-pix_fmt", "yuv420p",
-    "-b:v", "2M",
+    "-b:v", "500k",
+    "-bf", "0",
 
     "-f", "rtp",
     "-sdp_file", f"stream_{CAMERA_TYPE}.sdp",
@@ -58,4 +59,4 @@ cmd = [
 ]
 
 print("Starting video stream...")
-subprocess.run(["nice", "-n", "10"] + cmd)
+subprocess.run(cmd)
