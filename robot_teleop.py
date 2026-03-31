@@ -7,6 +7,8 @@ import json
 import time
 import os
 import subprocess
+import threading
+import RPi.GPIO as GPIO
 from motorgo import Plink, ControlMode
 
 # ----------------------
@@ -33,6 +35,53 @@ time.sleep(0.3)
 left_motor.power_command  = 0.0
 right_motor.power_command = 0.0
 print("Drive motor test done.")
+
+# ----------------------
+# STEPPER SETUP (ULN2003 / 28BYJ-48)
+# IN1=GPIO17, IN2=GPIO18, IN3=GPIO27, IN4=GPIO22
+# ----------------------
+STEPPER_PINS  = [17, 18, 27, 22]
+HALF_STEP_SEQ = [
+    [1, 0, 0, 0],
+    [1, 1, 0, 0],
+    [0, 1, 0, 0],
+    [0, 1, 1, 0],
+    [0, 0, 1, 0],
+    [0, 0, 1, 1],
+    [0, 0, 0, 1],
+    [1, 0, 0, 1],
+]
+STEP_DELAY      = 0.002   # seconds per half-step (~500 steps/sec)
+STEPPER_TIMEOUT = 0.15    # auto-stop if no command received for 150 ms
+
+GPIO.setmode(GPIO.BCM)
+for _pin in STEPPER_PINS:
+    GPIO.setup(_pin, GPIO.OUT)
+    GPIO.output(_pin, 0)
+
+stepper_direction = 0     # 0=stop, 1=forward, -1=backward
+stepper_step_idx  = 0
+last_stepper_cmd  = 0.0
+
+def _stepper_thread():
+    global stepper_direction, stepper_step_idx
+    while _stepper_running:
+        # Auto-stop when the client stops sending commands (key released)
+        if stepper_direction != 0 and (time.monotonic() - last_stepper_cmd) > STEPPER_TIMEOUT:
+            stepper_direction = 0
+
+        if stepper_direction != 0:
+            stepper_step_idx = (stepper_step_idx + stepper_direction) % 8
+            for pin, val in zip(STEPPER_PINS, HALF_STEP_SEQ[stepper_step_idx]):
+                GPIO.output(pin, val)
+            time.sleep(STEP_DELAY)
+        else:
+            time.sleep(0.005)   # idle poll
+
+_stepper_running = True
+_stepper_th = threading.Thread(target=_stepper_thread, daemon=True)
+_stepper_th.start()
+print("Stepper thread started.")
 
 # ----------------------
 # NETWORK SETUP
@@ -126,8 +175,16 @@ try:
                 stop_cv()
             elif cmd == "STOP":
                 stop()
-            elif cmd in ("SERVO_LEFT", "SERVO_RIGHT", "SERVO_CENTER"):
-                pass  # no servo hardware; ignore without stopping drive motors
+            elif cmd == "SERVO_LEFT":
+                stepper_direction = 1
+                last_stepper_cmd  = time.monotonic()
+            elif cmd == "SERVO_RIGHT":
+                stepper_direction = -1
+                last_stepper_cmd  = time.monotonic()
+            elif cmd == "SERVO_CENTER":
+                stepper_direction = 0
+                for pin in STEPPER_PINS:
+                    GPIO.output(pin, 0)   # deenergize coils
 
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
@@ -138,4 +195,9 @@ try:
 finally:
     stop()
     stop_cv()
+    _stepper_running = False
+    _stepper_th.join(timeout=1)
+    for pin in STEPPER_PINS:
+        GPIO.output(pin, 0)
+    GPIO.cleanup()
     print("\nTeleop stopped.")
