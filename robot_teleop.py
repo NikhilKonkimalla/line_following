@@ -12,7 +12,7 @@ from motorgo import Plink, ControlMode
 # ----------------------
 # DRIVE MOTOR SETUP (Plink)
 # ----------------------
-plink = Plink()
+plink = Plink() 
 plink.power_supply_voltage = 9.6
 
 right_motor1 = plink.channel1
