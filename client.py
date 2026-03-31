@@ -110,6 +110,7 @@ active_cmd = "STOP"
 active_servo_cmd = None  # tracks held servo key
 detect_arrow = False
 arrow_direction = ""
+cv_active = False
 
 try:
     while True:
@@ -161,6 +162,10 @@ try:
             cv2.putText(frame, f"Arrow: {arrow_direction}", (WIDTH - 300, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
+        cv_color = (0, 255, 0) if cv_active else (100, 100, 100)
+        cv2.putText(frame, f"CV: {'RUNNING' if cv_active else 'OFF'}  [C]",
+                    (WIDTH - 220, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cv_color, 2)
+
         cv2.namedWindow("USAR Teleop", cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty("USAR Teleop", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow("USAR Teleop", frame)
@@ -187,6 +192,11 @@ try:
             detect_arrow = not detect_arrow
             arrow_direction = ""
             print(f"Arrow detection: {'ON' if detect_arrow else 'OFF'}")
+
+        elif key == ord('c'):
+            cv_active = not cv_active
+            send_cmd("CV_START" if cv_active else "CV_STOP")
+            print(f"CV program: {'STARTED' if cv_active else 'STOPPED'}")
 
         elif key == ord(' '):
             active_cmd = "STOP"

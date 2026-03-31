@@ -5,81 +5,11 @@ Receives UDP drive commands from the client and controls drive motors via motorg
 import socket
 import json
 import time
-<<<<<<< HEAD
+import os
+import subprocess
 from motorgo import Plink, ControlMode
 
 # ----------------------
-=======
-# import threading
-import RPi.GPIO as GPIO
-from motorgo import Plink, ControlMode
-
-# ----------------------
-# STEPPER SETUP (single 28BYJ-48 via ULN2003) — DISABLED
-# ----------------------
-# # Motor A on GPIO 5/6/13/19 — physical pins 29/31/33/35
-# ARM_PINS = [5, 6, 13, 19]  # IN1-IN4 on the ULN2003 board
-#
-# # Half-step sequence (8 steps) — smoother and more torque than full-step
-# HALF_STEP_SEQ = [
-#     [1, 0, 0, 0],
-#     [1, 1, 0, 0],
-#     [0, 1, 0, 0],
-#     [0, 1, 1, 0],
-#     [0, 0, 1, 0],
-#     [0, 0, 1, 1],
-#     [0, 0, 0, 1],
-#     [1, 0, 0, 1],
-# ]
-#
-# STEP_DELAY    = 0.002   # seconds between steps — tune for speed vs torque
-# STEPS_PER_CMD = 16      # half-steps per ARM_LEFT/ARM_RIGHT command received
-#
-# GPIO.setmode(GPIO.BCM)
-# for pin in ARM_PINS:
-#     GPIO.setup(pin, GPIO.OUT)
-#     GPIO.output(pin, 0)
-#
-# step_index = 0
-#
-# def step_motor(index: int, direction: int) -> int:
-#     """Fire one half-step. direction: +1 or -1. Returns new index."""
-#     index = (index + direction) % len(HALF_STEP_SEQ)
-#     for pin, val in zip(ARM_PINS, HALF_STEP_SEQ[index]):
-#         GPIO.output(pin, val)
-#     return index
-#
-# def release_motor():
-#     """De-energise all coils — reduces heat and eliminates electrical noise."""
-#     for pin in ARM_PINS:
-#         GPIO.output(pin, 0)
-#
-# def move_arm(steps: int, direction: int):
-#     global step_index
-#     for _ in range(steps):
-#         step_index = step_motor(step_index, direction)
-#         time.sleep(STEP_DELAY)
-#     release_motor()
-#
-# # Run stepper moves on a background thread so the UDP loop stays responsive
-# _arm_thread = None
-# _arm_lock   = threading.Lock()
-#
-# def arm_move_async(steps: int, direction: int):
-#     """Kick off a non-blocking arm move. Drops command if already moving."""
-#     global _arm_thread
-#     with _arm_lock:
-#         if _arm_thread and _arm_thread.is_alive():
-#             return
-#         _arm_thread = threading.Thread(
-#             target=move_arm, args=(steps, direction), daemon=True
-#         )
-#         _arm_thread.start()
-#
-# print(f"Stepper arm initialized on pins {ARM_PINS}")
-
-# ----------------------
->>>>>>> a08c057f84ed1675193e4f85248fdef43dd016ef
 # DRIVE MOTOR SETUP (Plink)
 # ----------------------
 plink = Plink()
@@ -119,7 +49,7 @@ sock.bind(("", TELEOP_PORT))
 sock.settimeout(0.5)
 
 print(f"Teleop server listening on UDP port {TELEOP_PORT}")
-print("Controls: WASD=drive, Q/E=pivot, 1-5=speed, SPACE=stop")
+print("Controls: WASD=drive, Q/E=pivot, 1-5=speed, SPACE=stop, C=CV toggle")
 
 # ----------------------
 # DRIVE LOGIC
@@ -134,13 +64,44 @@ def set_motors(left: float, right: float):
     left  = clamp(left,  -MAX_POWER, MAX_POWER)
     right = clamp(right, -MAX_POWER, MAX_POWER)
     left_motor1.power_command  = left
-    left_motor2.power_command  = left 
-    right_motor1.power_command =  -right
-    right_motor2.power_command =  -right
+    left_motor2.power_command  = left
+    right_motor1.power_command = -right
+    right_motor2.power_command = -right
 
 def stop():
     set_motors(0.0, 0.0)
 
+# ----------------------
+# CV SUBPROCESS
+# ----------------------
+CV_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cv.py")
+cv_proc = None
+
+def start_cv():
+    global cv_proc
+    if cv_proc is not None and cv_proc.poll() is None:
+        print("cv.py is already running.")
+        return
+    print("Starting cv.py...")
+    cv_proc = subprocess.Popen(["python3", CV_SCRIPT])
+
+def stop_cv():
+    global cv_proc
+    if cv_proc is None or cv_proc.poll() is not None:
+        print("cv.py is not running.")
+        cv_proc = None
+        return
+    print("Stopping cv.py...")
+    cv_proc.terminate()
+    try:
+        cv_proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        cv_proc.kill()
+    cv_proc = None
+
+# ----------------------
+# MAIN LOOP
+# ----------------------
 last_cmd_time = time.monotonic()
 
 try:
@@ -169,20 +130,12 @@ try:
                 set_motors(-power * 0.1, -power)
             elif cmd == "BACK_RIGHT":
                 set_motors(-power, -power * 0.1)
+            elif cmd == "CV_START":
+                start_cv()
+            elif cmd == "CV_STOP":
+                stop_cv()
             elif cmd == "STOP":
                 stop()
-<<<<<<< HEAD
-=======
-
-            # --- Arm stepper commands — DISABLED ---
-            # elif cmd == "SERVO_LEFT":
-            #     arm_move_async(STEPS_PER_CMD, +1)
-            # elif cmd == "SERVO_RIGHT":
-            #     arm_move_async(STEPS_PER_CMD, -1)
-            # elif cmd == "SERVO_CENTER":
-            #     release_motor()
-
->>>>>>> a08c057f84ed1675193e4f85248fdef43dd016ef
             else:
                 stop()
 
@@ -194,10 +147,5 @@ try:
 
 finally:
     stop()
-<<<<<<< HEAD
+    stop_cv()
     print("\nTeleop stopped.")
-=======
-    # release_motor()
-    GPIO.cleanup()
-    print("\nTeleop stopped.")
->>>>>>> a08c057f84ed1675193e4f85248fdef43dd016ef
