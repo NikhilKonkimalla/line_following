@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Teleop server - runs on the robot (Raspberry Pi).
 Receives UDP drive commands from the client and controls drive motors via motorgo/Plink.
-Arm is driven by two mirrored 28BYJ-48 stepper motors via ULN2003 driver boards.
 """
 import socket
 import json
 import time
+<<<<<<< HEAD
+from motorgo import Plink, ControlMode
+
+# ----------------------
+=======
 # import threading
 import RPi.GPIO as GPIO
 from motorgo import Plink, ControlMode
@@ -75,6 +79,7 @@ from motorgo import Plink, ControlMode
 # print(f"Stepper arm initialized on pins {ARM_PINS}")
 
 # ----------------------
+>>>>>>> a08c057f84ed1675193e4f85248fdef43dd016ef
 # DRIVE MOTOR SETUP (Plink)
 # ----------------------
 plink = Plink()
@@ -114,7 +119,7 @@ sock.bind(("", TELEOP_PORT))
 sock.settimeout(0.5)
 
 print(f"Teleop server listening on UDP port {TELEOP_PORT}")
-print("Controls: WASD=drive, Q/E=pivot, [/]=arm, 1-5=speed, SPACE=stop")
+print("Controls: WASD=drive, Q/E=pivot, 1-5=speed, SPACE=stop")
 
 # ----------------------
 # DRIVE LOGIC
@@ -128,10 +133,10 @@ def clamp(x, lo, hi):
 def set_motors(left: float, right: float):
     left  = clamp(left,  -MAX_POWER, MAX_POWER)
     right = clamp(right, -MAX_POWER, MAX_POWER)
-    left_motor1.power_command  = -left
-    left_motor2.power_command  = -left
-    right_motor1.power_command =  right
-    right_motor2.power_command =  right
+    left_motor1.power_command  = left
+    left_motor2.power_command  = left 
+    right_motor1.power_command =  -right
+    right_motor2.power_command =  -right
 
 def stop():
     set_motors(0.0, 0.0)
@@ -148,7 +153,6 @@ try:
             current_power = power
             last_cmd_time = time.monotonic()
 
-            # --- Drive commands ---
             if cmd == "FWD":
                 set_motors(power, power)
             elif cmd == "BACK":
@@ -167,6 +171,8 @@ try:
                 set_motors(-power, -power * 0.1)
             elif cmd == "STOP":
                 stop()
+<<<<<<< HEAD
+=======
 
             # --- Arm stepper commands — DISABLED ---
             # elif cmd == "SERVO_LEFT":
@@ -176,6 +182,7 @@ try:
             # elif cmd == "SERVO_CENTER":
             #     release_motor()
 
+>>>>>>> a08c057f84ed1675193e4f85248fdef43dd016ef
             else:
                 stop()
 
@@ -187,6 +194,10 @@ try:
 
 finally:
     stop()
+<<<<<<< HEAD
+    print("\nTeleop stopped.")
+=======
     # release_motor()
     GPIO.cleanup()
     print("\nTeleop stopped.")
+>>>>>>> a08c057f84ed1675193e4f85248fdef43dd016ef

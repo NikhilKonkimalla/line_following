@@ -14,7 +14,7 @@ import json
 # ----------------------
 # CONFIGURATION - UPDATE THESE
 # ----------------------
-RASPI_IP = "172.26.230.146"  # <-- change to your robot's IP
+RASPI_IP = "172.26.229.41"  # <-- change to your robot's IP
 HELLO_PORT = 7123
 TELEOP_PORT = 7124
 
@@ -108,6 +108,8 @@ SERVO_KEYS = {
 
 active_cmd = "STOP"
 active_servo_cmd = None  # tracks held servo key
+detect_arrow = False
+arrow_direction = ""
 
 try:
     while True:
@@ -122,6 +124,31 @@ try:
         else:
             frame = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
 
+        # Arrow detection (toggled by 'b')
+        if detect_arrow:
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            lower_blue = np.array([90, 30, 10])
+            upper_blue = np.array([135, 255, 150])
+            mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+            blue_pixels = np.where(mask > 0)
+            if len(blue_pixels[1]) > 50:
+                xs = blue_pixels[1]
+                x_min, x_max = xs.min(), xs.max()
+                centroid_x = (x_min + x_max) / 2.0
+
+                left_count = np.sum(xs < centroid_x)
+                right_count = np.sum(xs >= centroid_x)
+
+                if left_count > right_count:
+                    arrow_direction = "< LEFT"
+                elif right_count > left_count:
+                    arrow_direction = "RIGHT >"
+                else:
+                    arrow_direction = "UNCERTAIN"
+            else:
+                arrow_direction = "NO ARROW"
+
         # Draw HUD overlay
         speed_text = f"Speed: {current_power:.0f}/5"
         cmd_text = f"Cmd: {active_cmd}"
@@ -129,6 +156,10 @@ try:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(frame, cmd_text, (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        if detect_arrow and arrow_direction:
+            cv2.putText(frame, f"Arrow: {arrow_direction}", (WIDTH - 300, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         cv2.namedWindow("USAR Teleop", cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty("USAR Teleop", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -151,6 +182,11 @@ try:
         elif key in DRIVE_KEYS:
             active_cmd = DRIVE_KEYS[key]
             active_servo_cmd = None  # release servo when driving
+
+        elif key == ord('b'):
+            detect_arrow = not detect_arrow
+            arrow_direction = ""
+            print(f"Arrow detection: {'ON' if detect_arrow else 'OFF'}")
 
         elif key == ord(' '):
             active_cmd = "STOP"
