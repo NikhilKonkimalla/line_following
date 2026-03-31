@@ -14,9 +14,9 @@ UDP_PORT = 7123
 VIDEO_PORT = 5000
 DEVICE = "/dev/video0"
 
-WIDTH = 640
-HEIGHT = 480
-FPS = 15
+WIDTH = 320
+HEIGHT = 240
+FPS = 10 
 
 INPUT_FORMATS = {
     "logitech": "mjpeg",
@@ -25,7 +25,7 @@ INPUT_FORMATS = {
 
 INPUT_FORMAT = INPUT_FORMATS[CAMERA_TYPE]
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
 sock.bind(("", UDP_PORT))
 
 print("Waiting for client HELLO...")
@@ -47,12 +47,10 @@ cmd = [
     "-framerate", str(FPS),
     "-i", DEVICE,
 
-    "-vcodec", "libx264",
-    "-preset", "ultrafast",
-    "-tune", "zerolatency",
-    "-vf", "vflip,hflip",
-    "-g", "30",
+    "-vcodec", "h264_v4l2m2m",
+    "-g", str(FPS),
     "-pix_fmt", "yuv420p",
+    "-b:v", "1M",
 
     "-f", "rtp",
     "-sdp_file", f"stream_{CAMERA_TYPE}.sdp",
@@ -60,4 +58,4 @@ cmd = [
 ]
 
 print("Starting video stream...")
-subprocess.run(cmd)
+subprocess.run(["nice", "-n", "10"] + cmd)
