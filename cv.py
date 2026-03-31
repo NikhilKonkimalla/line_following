@@ -3,9 +3,11 @@
 cv.py — Autonomous ball-knock task.
 
 Phases:
-  1. SCAN  – Capture camera frames and detect the blue arrow direction (LEFT or RIGHT).
-  2. TURN  – Rotate 90° toward the indicated ball using encoder odometry.
-  3. DRIVE – Drive forward with heading-hold until SPACE is pressed.
+  1. WAIT  – 10-second delay for operator setup.
+  2. SCAN  – Capture camera frames and detect the blue arrow direction (LEFT or RIGHT).
+  3. TURN  – Rotate 90° toward the indicated ball using encoder odometry.
+  4. DRIVE – Drive forward with heading-hold; stop after 1 foot (ToF sensor).
+  5. TURN  – In-place turn of ~55° to knock the ball.
 """
 
 import time
@@ -13,12 +15,16 @@ import math
 import board
 import numpy as np
 import cv2
+import adafruit_vl53l4cx
 from motorgo import Plink, ControlMode
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Hardware init  (mirrors NewODO.py / odometry.py conventions)
 # ─────────────────────────────────────────────────────────────────────────────
 i2c   = board.I2C()
+vl53  = adafruit_vl53l4cx.VL53L4CX(i2c)
+vl53.start_ranging()
+
 plink = Plink()
 plink.power_supply_voltage = 9.6
 
@@ -260,18 +266,40 @@ def wait_for_drive_start(cap, direction: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3 – Drive forward with heading-hold until SPACE
 # ─────────────────────────────────────────────────────────────────────────────
-DRIVE_SPEED   = 6.0    # rad/s wheel speed
-K_THETA       = 8.0    # proportional gain on heading error
-K_OMEGA       = 0.5    # damping on yaw rate
-MAX_WHEEL_CMD = 10.0
+DRIVE_SPEED      = 6.0    # rad/s wheel speed
+K_THETA          = 8.0    # proportional gain on heading error
+K_OMEGA          = 0.5    # damping on yaw rate
+MAX_WHEEL_CMD    = 10.0
+ONE_FOOT_CM      = 30.48  # 1 foot in centimeters
 
 
-def drive_until_stop(cap) -> None:
+def read_tof_cm() -> float:
+    """Read ToF distance in cm. Returns 999.0 if no valid reading."""
+    if vl53.data_ready:
+        dist = vl53.distance
+        vl53.clear_interrupt()
+        if dist is not None and dist > 0:
+            return dist
+    return 999.0
+
+
+def drive_one_foot(cap) -> None:
     """
-    Drive forward with heading-hold.  Show camera feed.
-    Press SPACE or ESC to stop.
+    Drive forward with heading-hold.  Stop automatically when the ToF sensor
+    indicates the robot has traveled ~1 foot (30.48 cm closer to the target).
+    SPACE/ESC = manual abort.
     """
-    print("=== PHASE 3: Driving.  Press SPACE to stop. ===")
+    initial_dist = read_tof_cm()
+    # Take a few readings to get a stable initial distance
+    for _ in range(5):
+        time.sleep(0.05)
+        d = read_tof_cm()
+        if d < initial_dist:
+            initial_dist = d
+
+    print(f"=== PHASE 4: Driving toward ball.  Initial ToF: {initial_dist:.1f} cm ===")
+    print(f"    Will stop after {ONE_FOOT_CM:.1f} cm of travel (SPACE/ESC = abort)")
+
     target_th = POSE_TH
     last_t    = time.monotonic()
 
@@ -292,31 +320,38 @@ def drive_until_stop(cap) -> None:
         cmd_r = max(0.0, min(MAX_WHEEL_CMD, DRIVE_SPEED + corr))
         set_wheel_velocity(cmd_l, cmd_r)
 
+        # Read ToF and check if we've traveled 1 foot
+        current_dist = read_tof_cm()
+        traveled_cm  = initial_dist - current_dist
+
         print(
-            f"[DRIVE] th={math.degrees(POSE_TH):+.1f} deg  "
-            f"err={math.degrees(err_th):+.2f} deg  "
-            f"cmdL={cmd_l:.2f}  cmdR={cmd_r:.2f}"
+            f"[DRIVE] ToF={current_dist:.1f} cm  traveled={traveled_cm:.1f}/{ONE_FOOT_CM:.1f} cm  "
+            f"err={math.degrees(err_th):+.1f} deg"
         )
+
+        if traveled_cm >= ONE_FOOT_CM:
+            print("=== 1 foot reached (ToF). Stopping. ===")
+            break
 
         # Camera feed (non-blocking waitKey)
         ret, frame = cap.read()
         if ret:
             cv2.putText(frame,
-                        f"DRIVING  th={math.degrees(POSE_TH):+.1f} deg  "
-                        f"err={math.degrees(err_th):+.1f} deg",
-                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
-            cv2.putText(frame, "SPACE / ESC = stop",
+                        f"DRIVING  ToF={current_dist:.0f}cm  moved={traveled_cm:.0f}/{ONE_FOOT_CM:.0f}cm",
+                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame, "SPACE / ESC = abort",
                         (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2)
             cv2.imshow("cv.py", frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key in (ord(' '), 27):
+            print("=== Manual abort. ===")
             break
 
         time.sleep(0.002)
 
     stop()
-    print("=== Stopped. ===")
+    print("=== Drive stopped. ===")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
@@ -331,22 +366,27 @@ def main() -> None:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     try:
-        # ── Phase 1: detect arrow ────────────────────────────────────────────
+        # ── Phase 1: 10-second delay for setup ─────────────────────────────
+        print("=== CV starting in 10 seconds... ===")
+        time.sleep(10)
+
+        # ── Phase 2: detect arrow ──────────────────────────────────────────
         direction = scan_for_arrow(cap)   # "LEFT" or "RIGHT"
 
-        # ── Phase 2: turn 90° toward the ball ────────────────────────────────
+        # ── Phase 3: turn 90° toward the ball ──────────────────────────────
         # Arrow LEFT  → ball is to our left  → turn CCW (+90°)
         # Arrow RIGHT → ball is to our right → turn CW  (-90°)
         turn_deg = 90.0 if direction == "LEFT" else -90.0
-        print(f"\n=== PHASE 2: Turning {turn_deg:+.0f} deg toward {direction} ball ===")
+        print(f"\n=== PHASE 3: Turning {turn_deg:+.0f} deg toward {direction} ball ===")
         POSE_X = POSE_Y = POSE_TH = 0.0
         turn_angle(turn_deg)
 
-        # ── Wait for operator confirmation ───────────────────────────────────
-        wait_for_drive_start(cap, direction)
+        # ── Phase 4: drive 1 foot toward the ball (ToF) ───────────────────
+        drive_one_foot(cap)
 
-        # ── Phase 3: drive toward the ball ───────────────────────────────────
-        drive_until_stop(cap)
+        # ── Phase 5: in-place turn ~55° to knock the ball ─────────────────
+        print("\n=== PHASE 5: Turning 55 deg to knock ball ===")
+        turn_angle(55.0)
 
     finally:
         stop()

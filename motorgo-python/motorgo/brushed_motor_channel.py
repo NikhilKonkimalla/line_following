@@ -39,7 +39,7 @@ class MotorChannel:
 
         self._pid_update_ready = False
 
-        self.motor_voltage_limit = 0.0
+        self.motor_voltage_limit = 5.0
 
     @property
     def velocity_command(self) -> float:

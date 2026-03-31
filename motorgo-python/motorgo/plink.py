@@ -147,10 +147,10 @@ class Plink:
         data = InitToPeri(
             self.frequency,
             self.__power_supply_voltage,
-            5.0,
-            5.0,
-            5.0,
-            5.0,
+            self.channel1.motor_voltage_limit,
+            self.channel2.motor_voltage_limit,
+            self.channel3.motor_voltage_limit,
+            self.channel4.motor_voltage_limit,
         )
 
         initialized = False

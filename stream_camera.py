@@ -14,9 +14,9 @@ UDP_PORT = 7123
 VIDEO_PORT = 5000
 DEVICE = "/dev/video0"
 
-WIDTH = 320
-HEIGHT = 240
-FPS = 10 
+WIDTH = 640
+HEIGHT = 480
+FPS = 15
 
 INPUT_FORMATS = {
     "logitech": "mjpeg",
@@ -50,7 +50,7 @@ cmd = [
     "-vcodec", "h264_v4l2m2m",
     "-g", str(FPS),
     "-pix_fmt", "yuv420p",
-    "-b:v", "1M",
+    "-b:v", "2M",
 
     "-f", "rtp",
     "-sdp_file", f"stream_{CAMERA_TYPE}.sdp",
