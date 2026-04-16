@@ -67,7 +67,7 @@ L1 = 4.0          # inches, link 1 (shoulder → elbow)
 L2 = 4.5          # inches, link 2 (elbow → end-effector)
 
 # Gear ratio: motor-shaft rad → joint rad  (24/40 from odometry.py / NewODO.py)
-GEAR_RATIO = 24.0 / 40.0
+GEAR_RATIO = 1/5
 
 # Motor direction signs – flip if a joint moves the wrong way
 SHOULDER_SIGN =  1
