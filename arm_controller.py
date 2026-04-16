@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-arm_controller.py  –  Two-link planar arm: IK, encoder odometry, obstacle avoidance.
+arm_controller.py  –  Two-link planar arm: IK, velocity-integrated odometry, obstacle avoidance.
 
 Arm geometry (inches):
     L1 = 4.0   shoulder → elbow
@@ -17,25 +17,20 @@ Playing field obstacle rectangles (inches, measured from arm base):
 
 Hardware (same as NewODO.py / odometry.py):
     shoulder_motor = plink.channel3
-    elbow_motor    = plink.channel2
-    Gear ratio     = 24/40  (motor-shaft rad → joint rad)
+    elbow_motor    = plink.channel4
+    Gear ratio     = 1/5  (motor-shaft rad → joint rad)
     Power supply   = 9.6 V,  voltage limit 6.0 V per motor
     Control mode   = VELOCITY  (Plink firmware PID closes the encoder loop)
 
 Angle tracking:
-    Uses motor.position (cumulative encoder radians from firmware, same field
-    that plink.py populates via update_position() each SPI tick).
-    At calibration we record the raw encoder value at a known pose; after that:
-        joint_angle = (motor.position - enc_at_cal) * GEAR_RATIO + angle_at_cal
-
-Outer control loop:
-    Reads current joint angles from motor.position, computes position error,
-    outputs a velocity command → sent to the Plink velocity controller.
-    Mirrors the read_wheel_vel() + update_pose() pattern of NewODO.py.
+    Joint angles are tracked by integrating motor.velocity (encoder-derived
+    rad/s from firmware) over time. Calibration sets the initial angles from
+    IK at a known home pose (EE at 6.25, 0).
 """
 
 import math
 import time
+import heapq
 import board                        # required by all robot files to init hardware
 from motorgo import Plink, ControlMode
 
@@ -43,11 +38,11 @@ from motorgo import Plink, ControlMode
 i2c = board.I2C()
 
 # ── Plink / motor setup (identical pattern to NewODO.py) ──────────────────────
-plink = Plink()
+plink = Plink() 
 plink.power_supply_voltage = 9.6
 
 shoulder_motor = plink.channel3   # joint 1  (θ1)
-elbow_motor    = plink.channel2   # joint 2  (θ2)
+elbow_motor    = plink.channel4   # joint 2  (θ2)
 
 shoulder_motor.motor_voltage_limit = 6.0
 elbow_motor.motor_voltage_limit    = 6.0
@@ -67,7 +62,7 @@ L1 = 4.0          # inches, link 1 (shoulder → elbow)
 L2 = 4.5          # inches, link 2 (elbow → end-effector)
 
 # Gear ratio: motor-shaft rad → joint rad  (24/40 from odometry.py / NewODO.py)
-GEAR_RATIO = 1/5
+GEAR_RATIO = 1/5 
 
 # Motor direction signs – flip if a joint moves the wrong way
 SHOULDER_SIGN =  1
@@ -91,44 +86,42 @@ OBS_MARGIN = 0.3   # safety buffer around each obstacle (inches)
 KP_POS      = 6.0                # position error (rad) → velocity command (rad/s)
 KD_POS      = 0.3                # derivative damping
 DT          = 0.005              # control-loop timestep (seconds)
-ANGLE_TOL   = math.radians(2.0) # "close enough" to target
-MAX_VEL     = 8.0                # maximum velocity command (rad/s) – same as NewODO drive speed
+ANGLE_TOL   = math.radians(2) # "close enough" to target
+MAX_VEL     = 1                # maximum velocity command (rad/s) – same as NewODO drive speed
 
 # Path planning: samples per segment for collision checking
 N_SAMPLES = 60
 
 
-# ── Encoder reading (mirrors read_wheel_vel() in NewODO.py) ───────────────────
+# ── Velocity-integrated angle tracking ────────────────────────────────────────
 
-# Calibration offsets – set by calibrate()
-_s_enc_cal   = 0.0    # shoulder encoder value at calibration
-_e_enc_cal   = 0.0    # elbow    encoder value at calibration
-_s_angle_cal = math.pi / 2   # shoulder joint angle at calibration (rad)
-_e_angle_cal = 0.0           # elbow    joint angle at calibration (rad)
+_t1_current  = 0.0   # current shoulder angle (rad), updated by integration
+_t2_current  = 0.0   # current elbow angle (rad), updated by integration
+_last_update = 0.0   # time.monotonic() of last integration step
+
+
+def update_joint_angles():
+    """Integrate motor.velocity to update tracked joint angles."""
+    global _t1_current, _t2_current, _last_update
+    now = time.monotonic()
+    dt = now - _last_update
+    _last_update = now
+    w1 = SHOULDER_SIGN * shoulder_motor.velocity * GEAR_RATIO
+    w2 = ELBOW_SIGN    * elbow_motor.velocity    * GEAR_RATIO
+    _t1_current += w1 * dt
+    _t2_current += w2 * dt
 
 
 def read_joint_angles():
-    """
-    Return current (theta1, theta2) from motor.position encoder values.
-
-    motor.position is the cumulative encoder position in radians as reported
-    by the Plink firmware (populated by update_position() each SPI tick in plink.py).
-    We apply the gear ratio and direction sign exactly like NewODO.py does for velocity:
-        wl = LEFT_MOTOR_SIGN * (left_motor.velocity * GEAR_WHEEL_PER_MOTOR)
-    """
-    t1 = _s_angle_cal + (shoulder_motor.position - _s_enc_cal) * GEAR_RATIO * SHOULDER_SIGN
-    t2 = _e_angle_cal + (elbow_motor.position    - _e_enc_cal) * GEAR_RATIO * ELBOW_SIGN
-    return t1, t2
+    """Return current (theta1, theta2) from velocity integration."""
+    update_joint_angles()
+    return _t1_current, _t2_current
 
 
-def read_joint_velocities():
-    """
-    Return current (w1, w2) joint velocities (rad/s).
-    Same formula as NewODO.py's read_wheel_vel():
-        wl = LEFT_MOTOR_SIGN * (left_motor.velocity * GEAR_WHEEL_PER_MOTOR)
-    """
-    w1 = SHOULDER_SIGN * (shoulder_motor.velocity * GEAR_RATIO)
-    w2 = ELBOW_SIGN    * (elbow_motor.velocity    * GEAR_RATIO)
+def read_joint_velocities(): 
+    """Return current (w1, w2) joint velocities (rad/s)."""
+    w1 = SHOULDER_SIGN * shoulder_motor.velocity * GEAR_RATIO
+    w2 = ELBOW_SIGN    * elbow_motor.velocity    * GEAR_RATIO
     return w1, w2
 
 
@@ -151,31 +144,20 @@ def stop():
 
 # ── Calibration ────────────────────────────────────────────────────────────────
 
-def calibrate(home_t1=math.pi / 2, home_t2=0.0):
-    """
-    Record encoder zero-point at a known physical pose.
-    Physically position the arm at:
-        θ1 = home_t1  (default 90° – arm pointing straight up)
-        θ2 = home_t2  (default  0° – links aligned)
-    then press Enter.
-    """
-    global _s_enc_cal, _e_enc_cal, _s_angle_cal, _e_angle_cal
+def calibrate():
+    """Assume arm is at home pose with EE at (6.25, 0). Set initial angles from IK."""
+    global _t1_current, _t2_current, _last_update
 
-    input(f"\nPlace arm at home pose "
-          f"(θ1={math.degrees(home_t1):.0f}°, "
-          f"θ2={math.degrees(home_t2):.0f}°) then press Enter... ")
+    home = ik(6.25, 0.0, elbow_up=True)
+    if home is None:
+        home = ik(6.25, 0.0, elbow_up=False)
 
-    time.sleep(0.3)   # let vibration settle before reading encoder
+    _t1_current, _t2_current = home
+    _last_update = time.monotonic()
 
-    _s_enc_cal   = shoulder_motor.position
-    _e_enc_cal   = elbow_motor.position
-    _s_angle_cal = home_t1
-    _e_angle_cal = home_t2
-
-    t1, t2 = read_joint_angles()
-    x, y = fk(t1, t2)
-    print(f"Calibrated → θ1={math.degrees(t1):.1f}°  "
-          f"θ2={math.degrees(t2):.1f}°  EE=({x:.2f}, {y:.2f}) in")
+    x, y = fk(_t1_current, _t2_current)
+    print(f"Calibrated → θ1={math.degrees(_t1_current):.1f}°  "
+          f"θ2={math.degrees(_t2_current):.1f}°  EE=({x:.2f}, {y:.2f}) in")
 
 
 # ── Kinematics ─────────────────────────────────────────────────────────────────
@@ -261,6 +243,11 @@ def config_in_collision(t1, t2):
 
 
 # ── Joint-space path planning ──────────────────────────────────────────────────
+#
+# Strategy (from arm_sim.py):
+#   1. Try direct line in joint space
+#   2. Try one-joint-at-a-time sequential moves
+#   3. Fall back to A* grid search over configuration space
 
 def _segment_clear(t1a, t2a, t1b, t2b):
     for i in range(N_SAMPLES + 1):
@@ -270,46 +257,166 @@ def _segment_clear(t1a, t2a, t1b, t2b):
     return True
 
 
+def _try_sequential_moves(t1a, t2a, t1b, t2b):
+    mid = (t1b, t2a)
+    if (not config_in_collision(*mid) and
+            _segment_clear(t1a, t2a, *mid) and
+            _segment_clear(*mid, t1b, t2b)):
+        return [(t1a, t2a), mid, (t1b, t2b)]
+    mid = (t1a, t2b)
+    if (not config_in_collision(*mid) and
+            _segment_clear(t1a, t2a, *mid) and
+            _segment_clear(*mid, t1b, t2b)):
+        return [(t1a, t2a), mid, (t1b, t2b)]
+    return None
+
+
+# ── A* over a discretised configuration space ────────────────────────────────
+
+_GRID_DEG = 5  # degrees per cell — ~36x64 grid
+
+def _angle_to_cell(angle: float, a_min: float) -> int:
+    return int(round((angle - a_min) / math.radians(_GRID_DEG)))
+
+def _cell_to_angle(cell: int, a_min: float) -> float:
+    return a_min + cell * math.radians(_GRID_DEG)
+
+def _build_collision_grid():
+    """Pre-compute which (t1, t2) grid cells are collision-free."""
+    n1 = _angle_to_cell(T1_MAX, T1_MIN) + 1
+    n2 = _angle_to_cell(T2_MAX, T2_MIN) + 1
+    free = set()
+    for i1 in range(n1):
+        for i2 in range(n2):
+            t1 = _cell_to_angle(i1, T1_MIN)
+            t2 = _cell_to_angle(i2, T2_MIN)
+            if not config_in_collision(t1, t2):
+                free.add((i1, i2))
+    return free, n1, n2
+
+_cspace_cache = None
+
+def _get_cspace():
+    global _cspace_cache
+    if _cspace_cache is None:
+        _cspace_cache = _build_collision_grid()
+    return _cspace_cache
+
+
+def _astar_grid(start_t1, start_t2, goal_t1, goal_t2):
+    """A* search on the configuration-space grid. Returns waypoint list or None."""
+    free, n1, n2 = _get_cspace()
+
+    s_i1 = max(0, min(n1 - 1, _angle_to_cell(start_t1, T1_MIN)))
+    s_i2 = max(0, min(n2 - 1, _angle_to_cell(start_t2, T2_MIN)))
+    g_i1 = max(0, min(n1 - 1, _angle_to_cell(goal_t1, T1_MIN)))
+    g_i2 = max(0, min(n2 - 1, _angle_to_cell(goal_t2, T2_MIN)))
+
+    if (g_i1, g_i2) not in free:
+        return None
+
+    start = (s_i1, s_i2)
+    goal = (g_i1, g_i2)
+
+    if start == goal:
+        return [(start_t1, start_t2), (goal_t1, goal_t2)]
+
+    def heuristic(node):
+        return abs(node[0] - goal[0]) + abs(node[1] - goal[1])
+
+    open_set = [(heuristic(start), 0, start)]
+    came_from = {}
+    g_score = {start: 0}
+    neighbors_8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1),
+                   (0, 1), (1, -1), (1, 0), (1, 1)]
+
+    while open_set:
+        _, cost, current = heapq.heappop(open_set)
+
+        if current == goal:
+            cells = [current]
+            while current in came_from:
+                current = came_from[current]
+                cells.append(current)
+            cells.reverse()
+
+            # Greedy merge: skip cells as long as segment stays clear
+            wp_idx = [0]
+            i = 0
+            while i < len(cells) - 1:
+                best = i + 1
+                for j in range(i + 2, len(cells)):
+                    a1 = _cell_to_angle(cells[i][0], T1_MIN)
+                    a2 = _cell_to_angle(cells[i][1], T2_MIN)
+                    b1 = _cell_to_angle(cells[j][0], T1_MIN)
+                    b2 = _cell_to_angle(cells[j][1], T2_MIN)
+                    if _segment_clear(a1, a2, b1, b2):
+                        best = j
+                    else:
+                        break
+                wp_idx.append(best)
+                i = best
+
+            result = [(start_t1, start_t2)]
+            for idx in wp_idx[1:-1]:
+                result.append((_cell_to_angle(cells[idx][0], T1_MIN),
+                               _cell_to_angle(cells[idx][1], T2_MIN)))
+            result.append((goal_t1, goal_t2))
+            return result
+
+        if cost > g_score.get(current, float('inf')):
+            continue
+
+        ct1 = _cell_to_angle(current[0], T1_MIN)
+        ct2 = _cell_to_angle(current[1], T2_MIN)
+        for d1, d2 in neighbors_8:
+            nb = (current[0] + d1, current[1] + d2)
+            if nb not in free:
+                continue
+            nt1 = _cell_to_angle(nb[0], T1_MIN)
+            nt2 = _cell_to_angle(nb[1], T2_MIN)
+            if not _segment_clear(ct1, ct2, nt1, nt2): 
+                continue
+            step_cost = 1.414 if (d1 != 0 and d2 != 0) else 1.0
+            new_cost = cost + step_cost
+            if new_cost < g_score.get(nb, float('inf')):
+                g_score[nb] = new_cost
+                heapq.heappush(open_set, (new_cost + heuristic(nb), new_cost, nb))
+                came_from[nb] = current
+
+    return None
+
+
 def plan_joint_path(start_t1, start_t2, goal_t1, goal_t2):
     """
-    Return ordered (t1, t2) waypoints from start to goal.
-    1. Try direct straight line in joint space.
-    2. If blocked, route via canonical safe intermediate poses.
+    Plan a collision-free joint-space path.
+    1. Direct line
+    2. Sequential (one joint at a time)
+    3. A* grid search over configuration space
     """
     if _segment_clear(start_t1, start_t2, goal_t1, goal_t2):
         return [(start_t1, start_t2), (goal_t1, goal_t2)]
 
-    safe_poses = [
-        (math.pi / 2,        0.0),
-        (math.pi / 2,  math.pi / 4),
-        (math.pi / 2, -math.pi / 4),
-        (math.pi / 4,        0.0),
-        (3 * math.pi / 4,    0.0),
-        (math.pi / 3,  math.pi / 6),
-        (2 * math.pi / 3, -math.pi / 6),
-    ]
+    seq = _try_sequential_moves(start_t1, start_t2, goal_t1, goal_t2)
+    if seq is not None:
+        print(f"  Using sequential move via waypoint")
+        return seq
 
-    for mid_t1, mid_t2 in safe_poses:
-        if (not config_in_collision(mid_t1, mid_t2) and
-                _segment_clear(start_t1, start_t2, mid_t1, mid_t2) and
-                _segment_clear(mid_t1, mid_t2, goal_t1, goal_t2)):
-            print(f"  Routing via waypoint "
-                  f"θ1={math.degrees(mid_t1):.0f}° θ2={math.degrees(mid_t2):.0f}°")
-            return [(start_t1, start_t2), (mid_t1, mid_t2), (goal_t1, goal_t2)]
+    path = _astar_grid(start_t1, start_t2, goal_t1, goal_t2)
+    if path is not None:
+        print(f"  A* path: {len(path) - 1} segment(s)")
+        return path
 
-    print("  Warning: no clear path found – using direct route")
-    return [(start_t1, start_t2), (goal_t1, goal_t2)]
+    print("  Warning: no collision-free path found")
+    return None
 
 
 # ── Joint position control ─────────────────────────────────────────────────────
 
 def move_to_angles(goal_t1, goal_t2, timeout=15.0):
     """
-    Outer position loop: reads joint angles from encoder (motor.position),
+    Outer position loop: reads joint angles from velocity integration,
     computes PD error, outputs velocity commands to the Plink velocity controller.
-
-    Mirrors NewODO.py's pattern:
-        update_pose(dt) reads encoders → pose error → set_wheel_velocity()
     """
     prev_e1 = 0.0
     prev_e2 = 0.0
@@ -392,6 +499,9 @@ def move_to_xy(x_goal, y_goal, elbow_up=True, timeout_per_seg=15.0):
     print(f"  Start: θ1={math.degrees(start_t1):.1f}°  θ2={math.degrees(start_t2):.1f}°")
 
     path = plan_joint_path(start_t1, start_t2, goal_t1, goal_t2)
+    if path is None:
+        print("  Error: no collision-free path found")
+        return False
     print(f"  Path: {len(path) - 1} segment(s)")
 
     for idx, (wt1, wt2) in enumerate(path[1:], 1):
@@ -413,19 +523,28 @@ def move_to_xy(x_goal, y_goal, elbow_up=True, timeout_per_seg=15.0):
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
-    # Calibrate: place arm at home pose (straight up, θ1=90°, θ2=0°) then Enter
     calibrate()
 
-    # Set your target here (inches, world frame, origin = arm base)
-    targets = [
-        (3.0, 3.0),   # example – replace with your actual goal
-    ]
-
-    for (gx, gy) in targets:
-        if not move_to_xy(gx, gy):
-            print(f"  Failed to reach ({gx}, {gy}), stopping.")
+    print("\nEnter target positions as 'x y' (inches), 'home', or 'q' to quit.")
+    while True:
+        try:
+            cmd = input("\n> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
             break
-        time.sleep(0.5)
+
+        if cmd in ("q", "quit", "exit"):
+            break
+        if cmd == "home":
+            move_to_xy(6.25, 0.0)
+            continue
+        try:
+            parts = cmd.replace(",", " ").split()
+            gx, gy = float(parts[0]), float(parts[1])
+        except (ValueError, IndexError):
+            print("Usage: x y  (e.g. '3.0 4.5') or 'home' or 'q'")
+            continue
+
+        move_to_xy(gx, gy)
 
     stop()
     print("Done.")
