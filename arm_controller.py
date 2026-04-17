@@ -31,6 +31,10 @@ Angle tracking:
 import math
 import time
 import heapq
+import sys
+import tty
+import termios
+import select
 import board                        # required by all robot files to init hardware
 from motorgo import Plink, ControlMode
 
@@ -62,17 +66,17 @@ L1 = 4.0          # inches, link 1 (shoulder → elbow)
 L2 = 4.5          # inches, link 2 (elbow → end-effector)
 
 # Gear ratio: motor-shaft rad → joint rad  (24/40 from odometry.py / NewODO.py)
-GEAR_RATIO = 1/5 
+GEAR_RATIO = 1/15 
 
 # Motor direction signs – flip if a joint moves the wrong way
-SHOULDER_SIGN =  1
-ELBOW_SIGN    = -1   # mirrors RIGHT_MOTOR_SIGN = -1 in NewODO.py
+SHOULDER_SIGN =  -1
+ELBOW_SIGN    = 1   # mirrors RIGHT_MOTOR_SIGN = -1 in NewODO.py
 
 # Joint limits (radians)
 T1_MIN = 0.0
-T1_MAX = math.pi
+T1_MAX = math.pi 
 T2_MIN = -math.pi
-T2_MAX = math.pi
+T2_MAX = math.pi  
 
 # ── Obstacle definitions (inches, world frame, origin = arm base) ──────────────
 # (x_min, x_max, y_min, y_max) – estimated from playing-field image
@@ -80,7 +84,7 @@ OBSTACLES = [
     (-4.0, -2.0, 4.0, 6.0),   # left block
     ( 1.0,  3.0, 5.0, 7.0),   # right block
 ]
-OBS_MARGIN = 0.3   # safety buffer around each obstacle (inches)
+OBS_MARGIN = 0.1   # safety buffer around each obstacle (inches)
 
 # ── Outer position-loop parameters ────────────────────────────────────────────
 KP_POS      = 6.0                # position error (rad) → velocity command (rad/s)
@@ -88,13 +92,14 @@ KD_POS      = 0.3                # derivative damping
 DT          = 0.005              # control-loop timestep (seconds)
 ANGLE_TOL   = math.radians(2) # "close enough" to target
 MAX_VEL     = 1                # maximum velocity command (rad/s) – same as NewODO drive speed
+JOG_VEL     = 4             # joint velocity for manual jog mode (rad/s)
 
 # Path planning: samples per segment for collision checking
 N_SAMPLES = 60
 
 
 # ── Velocity-integrated angle tracking ────────────────────────────────────────
-
+ 
 _t1_current  = 0.0   # current shoulder angle (rad), updated by integration
 _t2_current  = 0.0   # current elbow angle (rad), updated by integration
 _last_update = 0.0   # time.monotonic() of last integration step
@@ -104,7 +109,7 @@ def update_joint_angles():
     """Integrate motor.velocity to update tracked joint angles."""
     global _t1_current, _t2_current, _last_update
     now = time.monotonic()
-    dt = now - _last_update
+    dt = now - _last_update 
     _last_update = now
     w1 = SHOULDER_SIGN * shoulder_motor.velocity * GEAR_RATIO
     w2 = ELBOW_SIGN    * elbow_motor.velocity    * GEAR_RATIO
@@ -520,12 +525,83 @@ def move_to_xy(x_goal, y_goal, elbow_up=True, timeout_per_seg=15.0):
     return True
 
 
+# ── Manual jog mode ───────────────────────────────────────────────────────────
+
+def _get_key(timeout=0.05):
+    """Read a single keypress without waiting for Enter. Returns '' on timeout."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            return sys.stdin.read(1)
+        return ''
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def jog_mode():
+    """Manual joint control: A/D = shoulder, W/S = elbow, space = stop, Q = exit."""
+    print("\n── JOG MODE ──")
+    print("  A/D   : shoulder (joint 1)  +/-")
+    print("  W/S   : elbow    (joint 2)  +/-")
+    print("  SPACE : stop both joints")
+    print("  Q     : exit jog mode")
+    print()
+
+    global _t1_current, _t2_current, _last_update
+    v1, v2 = 0.0, 0.0
+
+    try:
+        while True:
+            key = _get_key()
+
+            if key == 'a':
+                v1 = JOG_VEL
+            elif key == 'd':
+                v1 = -JOG_VEL
+            elif key == 'w':
+                v2 = JOG_VEL
+            elif key == 's':
+                v2 = -JOG_VEL
+            elif key == ' ':
+                v1, v2 = 0.0, 0.0
+            elif key == 'q':
+                stop()
+                # Reset: arm now considers itself at home (6.25, 0)
+                home = ik(6.25, 0.0, elbow_up=True) or ik(6.25, 0.0, elbow_up=False)
+                _t1_current, _t2_current = home
+                _last_update = time.monotonic()
+                print(f"\n  Jog ended. Arm reset to (6.25, 0).")
+                return
+
+            set_joint_velocities(v1, v2)
+            update_joint_angles()
+
+            t1, t2 = read_joint_angles()
+            x, y = fk(t1, t2)
+            print(f"  θ1={math.degrees(t1):.1f}°  θ2={math.degrees(t2):.1f}°  "
+                  f"EE=({x:.2f},{y:.2f})  vel=({v1:+.2f},{v2:+.2f})", end="\r")
+ 
+            time.sleep(DT)
+
+    except KeyboardInterrupt:
+        stop()
+        home = ik(6.25, 0.0, elbow_up=True) or ik(6.25, 0.0, elbow_up=False)
+        _t1_current, _t2_current = home
+        _last_update = time.monotonic()
+        print("\n  Jog ended. Arm reset to (6.25, 0).")
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
     calibrate()
 
-    print("\nEnter target positions as 'x y' (inches), 'home', or 'q' to quit.")
+    print("\nEnter target positions as 'x y' (inches). Separate multiple with ';'.")
+    print("  Commands: 'home', 'jog' (manual A/D W/S control), 'q' to quit.")
+    print("  Examples: '3 4'  or  '3 4 ; -2 5 ; 0 3'")
     while True:
         try:
             cmd = input("\n> ").strip().lower()
@@ -537,14 +613,54 @@ def main():
         if cmd == "home":
             move_to_xy(6.25, 0.0)
             continue
-        try:
-            parts = cmd.replace(",", " ").split()
-            gx, gy = float(parts[0]), float(parts[1])
-        except (ValueError, IndexError):
-            print("Usage: x y  (e.g. '3.0 4.5') or 'home' or 'q'")
+        if cmd == "jog":
+            jog_mode()
             continue
 
-        move_to_xy(gx, gy)
+        # Parse waypoints separated by semicolons
+        waypoint_strs = cmd.split(";")
+        waypoints = []
+        parse_error = False
+        for wp_str in waypoint_strs:
+            wp_str = wp_str.strip()
+            if not wp_str:
+                continue
+            try:
+                parts = wp_str.replace(",", " ").split()
+                gx, gy = float(parts[0]), float(parts[1])
+                waypoints.append((gx, gy))
+            except (ValueError, IndexError):
+                print(f"  Bad waypoint: '{wp_str}'. Use 'x y' format.")
+                parse_error = True
+                break
+
+        if parse_error or not waypoints:
+            print("Usage: x y [; x y ; ...]  (e.g. '3 4 ; -2 5') or 'home' or 'q'")
+            continue
+
+        # Execute waypoints in sequence
+        total = len(waypoints)
+        success = False
+        for i, (gx, gy) in enumerate(waypoints, 1):
+            if total > 1:
+                print(f"\n{'='*40}")
+                print(f"  Waypoint {i}/{total}: ({gx:.2f}, {gy:.2f})")
+                print(f"{'='*40}")
+
+            success = move_to_xy(gx, gy)
+
+            if not success:
+                if total > 1:
+                    print(f"\n  Failed at waypoint {i}/{total}. Remaining skipped.")
+                break
+
+            # Wait between waypoints (not after the last one)
+            if i < total:
+                print(f"\n  Holding at waypoint {i}/{total} for 3 seconds...")
+                time.sleep(3)
+
+        if total > 1 and success:
+            print(f"\n  All {total} waypoints completed.")
 
     stop()
     print("Done.")
